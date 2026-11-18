@@ -198,6 +198,7 @@ fn fixture_analysis() -> Analysis {
         ],
         cyclomatic: 3,
         max_nesting: 1,
+        cognitive: 0,
     }];
     a.types = vec![
         TypeNode {

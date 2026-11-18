@@ -73,7 +73,10 @@ const STAMP_VERSION: u32 = 2;
 /// 2 is the first to carry the module graph ([`Analysis::modules`] /
 /// [`Analysis::module_edges`]) that `learn` began building in CORE-9; every
 /// revision-1 cache (which stored an empty graph) must be re-analyzed once.
-pub const LEARN_REVISION: u32 = 2;
+/// Revision 3 stores [`crate::analysis::FunctionCfg::cognitive`] on every
+/// function. A revision-2 cache has no cognitive scores (they would load as
+/// `0`), so it is a miss and the repo is re-analyzed once.
+pub const LEARN_REVISION: u32 = 3;
 
 /// Progress event for the UI (F1). `done`/`total` are per-phase: `done` starts
 /// at 0 and ends at `total` for every phase. The four counts are running
@@ -252,16 +255,39 @@ pub fn learn(root: &Path, progress: &dyn Fn(LearnProgress)) -> anyhow::Result<(I
 
     let total = needs.len();
     emit(progress, "analyze", 0, total, &analysis);
-    for (i, f) in needs.iter().enumerate() {
-        let Some(lang) = crate::analyze::Lang::from_walk(&f.lang) else {
-            continue;
-        };
-        let source = std::fs::read_to_string(root.join(f.path.as_str()))?;
+    // Parse and analyze off the UI thread pool. Merge in path order, and
+    // re-apply the Rust analyzer's whole-buffer sort after each Rust file so
+    // the artifact matches the old single-threaded append order.
+    let jobs: Vec<crate::parallel::FileJob> = needs
+        .iter()
+        .map(|f| crate::parallel::FileJob::new(f.path.clone()))
+        .collect();
+    let langs: BTreeMap<String, crate::analyze::Lang> = needs
+        .iter()
+        .filter_map(|f| crate::analyze::Lang::from_walk(&f.lang).map(|lang| (f.path.clone(), lang)))
+        .collect();
+    let root_buf = root.to_path_buf();
+    let partials = crate::parallel::map_files(&jobs, 0, |job| -> anyhow::Result<_> {
+        let lang = langs[job.path.as_str()];
+        let source = std::fs::read_to_string(root_buf.join(job.path.as_str()))?;
         let symbols = symbols_by_file
-            .get(f.path.as_str())
+            .get(job.path.as_str())
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        crate::analyze::analyze(f.path.as_str(), lang, &source, symbols, &mut analysis);
+        let mut partial = Analysis::new();
+        crate::analyze::analyze(job.path.as_str(), lang, &source, symbols, &mut partial);
+        Ok((lang, partial))
+    });
+    for (i, item) in partials.into_iter().enumerate() {
+        let (lang, partial) = item?;
+        analysis.variables.extend(partial.variables);
+        analysis.cfgs.extend(partial.cfgs);
+        analysis.types.extend(partial.types);
+        analysis.type_edges.extend(partial.type_edges);
+        analysis.uses.extend(partial.uses);
+        if lang == crate::analyze::Lang::Rust {
+            crate::analyze::rust::sort_analysis(&mut analysis);
+        }
         emit(progress, "analyze", i + 1, total, &analysis);
     }
 

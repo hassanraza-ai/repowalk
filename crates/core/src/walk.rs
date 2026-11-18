@@ -102,11 +102,36 @@ pub(crate) fn file_size(path: &Path) -> u64 {
 
 fn is_entrypoint(rel: &Path, text: &str) -> bool {
     let name = rel.file_name().and_then(OsStr::to_str).unwrap_or("");
-    name == "main.rs"
-        || name == "lib.rs"
-        || name == "__main__.py"
-        || text.contains("fn main")
-        || text.contains("__main__")
+    if name == "main.rs" || name == "lib.rs" || name == "__main__.py" {
+        return true;
+    }
+    // Only the language that can actually be an entrypoint. A markdown file
+    // that quotes `fn main` is not a program entry, and `fn main_helper` is
+    // not `fn main`.
+    match rel.extension().and_then(OsStr::to_str) {
+        Some("rs") => rust_fn_main(text),
+        Some("py") => python_dunder_main(text),
+        _ => false,
+    }
+}
+
+fn rust_fn_main(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("fn main(")
+            || trimmed.starts_with("fn main (")
+            || trimmed.starts_with("pub fn main(")
+            || trimmed.starts_with("pub(crate) fn main(")
+            || trimmed.starts_with("async fn main(")
+            || trimmed.starts_with("pub async fn main(")
+    })
+}
+
+fn python_dunder_main(text: &str) -> bool {
+    text.lines().any(|line| {
+        let code = line.split('#').next().unwrap_or("");
+        code.contains("__main__")
+    })
 }
 
 #[cfg(test)]
@@ -194,6 +219,31 @@ mod tests {
         assert_eq!(get("README.md").lang, "markdown");
         assert!(!get("README.md").is_entrypoint);
         assert_eq!(get("empty.rs").lines, 0);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn entrypoint_does_not_match_a_lookalike_or_a_quote_in_prose() {
+        let root = fixture("entry-lookalike");
+        fs::write(root.join("helper.rs"), "fn main_helper() {}\n").unwrap();
+        fs::write(root.join("app.rs"), "pub fn main() {}\n").unwrap();
+        fs::write(root.join("notes.md"), "call `fn main()` to start\n").unwrap();
+        fs::write(
+            root.join("tool.py"),
+            "# see __main__\ndef run():\n    pass\n",
+        )
+        .unwrap();
+
+        let entries = walk(&root).unwrap();
+        let get = |p: &str| entries.iter().find(|e| e.path == p).unwrap();
+        assert!(!get("helper.rs").is_entrypoint);
+        assert!(get("app.rs").is_entrypoint);
+        assert!(!get("notes.md").is_entrypoint);
+        assert!(
+            !get("tool.py").is_entrypoint,
+            "a comment is not an entrypoint"
+        );
 
         fs::remove_dir_all(&root).ok();
     }

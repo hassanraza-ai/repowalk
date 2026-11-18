@@ -1,6 +1,7 @@
 //! repowalk core — indexing, model, and algorithms. No GUI/CLI deps.
 pub mod analysis;
 pub mod analyze;
+pub mod cognitive;
 pub mod complexity;
 pub mod export;
 pub mod feature;
@@ -18,6 +19,7 @@ pub mod resolve;
 pub mod rules;
 pub mod search;
 pub mod store;
+pub mod syntax;
 pub mod tour;
 pub mod types;
 pub mod walk;

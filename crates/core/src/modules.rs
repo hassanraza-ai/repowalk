@@ -225,6 +225,78 @@ pub fn cycles(nodes: &[ModuleNode], edges: &[ModuleEdge]) -> Vec<Vec<String>> {
     out
 }
 
+/// One module's afferent coupling (Ca), efferent coupling (Ce), and instability.
+///
+/// Ca is how many other modules import this one. Ce is how many other modules
+/// this one imports. Instability is `Ce / (Ca + Ce)`, stored in thousandths so
+/// the report stays exact (`500` prints as `0.500`). Submodule edges are
+/// containment, not a dependency, and are ignored. A repeated import between
+/// the same pair counts once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleCoupling {
+    pub id: String,
+    pub ca: usize,
+    pub ce: usize,
+    /// `Ce * 1000 / (Ca + Ce)`.
+    pub instability_millis: u32,
+}
+
+impl ModuleCoupling {
+    /// `I` with three decimal places, for reports.
+    pub fn instability_label(&self) -> String {
+        format!(
+            "{}.{:03}",
+            self.instability_millis / 1000,
+            self.instability_millis % 1000
+        )
+    }
+}
+
+/// Coupling of every module that imports or is imported.
+///
+/// Highest instability first, then module id. Isolated modules are omitted:
+/// `I` is undefined when `Ca + Ce == 0`.
+pub fn coupling(edges: &[ModuleEdge]) -> Vec<ModuleCoupling> {
+    let mut incoming: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut outgoing: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for edge in edges {
+        if edge.kind != ModuleEdgeKind::Import || edge.from == edge.to {
+            continue;
+        }
+        outgoing
+            .entry(edge.from.as_str())
+            .or_default()
+            .insert(edge.to.as_str());
+        incoming
+            .entry(edge.to.as_str())
+            .or_default()
+            .insert(edge.from.as_str());
+    }
+    let mut ids: BTreeSet<&str> = BTreeSet::new();
+    ids.extend(incoming.keys().copied());
+    ids.extend(outgoing.keys().copied());
+    let mut rows: Vec<ModuleCoupling> = ids
+        .into_iter()
+        .map(|id| {
+            let ca = incoming.get(id).map(|s| s.len()).unwrap_or(0);
+            let ce = outgoing.get(id).map(|s| s.len()).unwrap_or(0);
+            let total = ca + ce;
+            ModuleCoupling {
+                id: id.to_string(),
+                ca,
+                ce,
+                instability_millis: ce.saturating_mul(1000).checked_div(total).unwrap_or(0) as u32,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.instability_millis
+            .cmp(&a.instability_millis)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    rows
+}
+
 /// `crates/<name>/…` → `crates/<name>`; everything else belongs to the root crate.
 fn crate_root_of(path: &str) -> String {
     let mut it = path.split('/');
@@ -559,5 +631,51 @@ mod tests {
         assert!(nodes.is_empty());
         assert!(edges.is_empty());
         assert!(cycles(&nodes, &edges).is_empty());
+    }
+
+    #[test]
+    fn coupling_counts_distinct_imports_and_skips_submodules() {
+        let edges = vec![
+            ModuleEdge {
+                from: "app".into(),
+                to: "core".into(),
+                kind: ModuleEdgeKind::Import,
+                count: 3,
+            },
+            ModuleEdge {
+                from: "app".into(),
+                to: "core".into(),
+                kind: ModuleEdgeKind::Import,
+                count: 1,
+            },
+            ModuleEdge {
+                from: "cli".into(),
+                to: "core".into(),
+                kind: ModuleEdgeKind::Import,
+                count: 1,
+            },
+            ModuleEdge {
+                from: "core".into(),
+                to: "util".into(),
+                kind: ModuleEdgeKind::Import,
+                count: 1,
+            },
+            ModuleEdge {
+                from: "core".into(),
+                to: "core/lib.rs".into(),
+                kind: ModuleEdgeKind::Submodule,
+                count: 1,
+            },
+        ];
+        let rows = coupling(&edges);
+        let core = rows.iter().find(|r| r.id == "core").unwrap();
+        assert_eq!(core.ca, 2, "app and cli, not the duplicate edge");
+        assert_eq!(core.ce, 1);
+        assert_eq!(core.instability_millis, 333);
+        assert_eq!(core.instability_label(), "0.333");
+        let app = rows.iter().find(|r| r.id == "app").unwrap();
+        assert_eq!((app.ca, app.ce, app.instability_millis), (0, 1, 1000));
+        assert!(rows.iter().all(|r| r.id != "core/lib.rs"));
+        assert!(rows[0].instability_millis >= rows[1].instability_millis);
     }
 }

@@ -178,6 +178,7 @@ repowalk/
 cargo test                      # includes golden-file tests against fixtures/
 UPDATE_GOLDEN=1 cargo test      # regenerate fixtures/golden/index.json
 cargo clippy -- -D warnings
+cargo run --release -p repowalk-core --example bench_learn   # cold/warm learn timing
 ```
 
 ---

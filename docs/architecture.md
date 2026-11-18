@@ -74,31 +74,36 @@ counts so the GUI progress view can show per-phase progress.
 | Phase | Does | Emits |
 |---|---|---|
 | **walk** | enumerate files (same ignore/skip set as `build_index`) | file list + languages |
-| **parse** | per-file tree-sitter extraction, dispatched by `analyze::Lang` | `Symbol` / `CallSite` / `Import` |
+| **parse** | per-file tree-sitter extraction, dispatched by `analyze::Lang`, in parallel | `Symbol` / `CallSite` / `Import` |
 | **resolve** | call + import edges (`resolve::resolve`, `resolve::resolve_imports`) | `Index::edges` |
-| **analyze** | `analyze::analyze(file, lang, src, symbols, &mut Analysis)` appends variables, CFG, types, use-sites | `Analysis` |
+| **analyze** | per-file v2 analysis, in parallel; Rust files re-sort the accumulated buffer so order matches a single thread | `Analysis` |
 | **cache** | atomic write of the versioned artifact | `.repowalk/analysis.json` |
 
 - `pipeline::build_index` remains the v1 spine: **walk → parse → resolve →
   timestamp → save** (`index.json`). The v2 learn run inserts **analyze**
   between resolve and cache and caches a *second* file (below).
+- Parse and analyze run through `parallel::map_files` (std scoped threads,
+  merged in path order so a 1-core run and a many-core run match). Each
+  thread reuses one tree-sitter parser per grammar, and each query is
+  compiled once per process.
 - Progress type: `LearnProgress { phase, done, total, variables, cfgs, types,
   uses }` is emitted by `learn::learn` at every phase boundary and once per file.
   The GUI additionally drives the v1 window through
   `IndexProgress { done, total, finished, error, index }`
   (`crates/gui/src/app.rs`).
-- Callers: the GUI worker in `App::start_indexing` calls
-  `repowalk_core::pipeline::build_index`; every v2 CLI query command
-  (`report` / `graph` / `variables` / `complexity` / `refs`) loads through
-  `commands::artifacts::load`, which reuses the cached `analysis.json` or runs
-  `learn::learn` once; the v1 CLI commands call core directly.
+- Callers: the GUI worker in `App::start_indexing` calls `learn::learn`.
+  If that cannot write its cache (a read-only tree, a full disk) it falls
+  back to `pipeline::build_index` and shows the index only. Every v2 CLI
+  query command (`report` / `graph` / `variables` / `complexity` / `refs`)
+  loads through `commands::artifacts::load`, which runs `learn::learn` once.
+  The v1 CLI commands call core directly.
 
 ### Cache files
 
 | File | Schema | Version | Invalidation |
 |---|---|---|---|
 | `.repowalk/index.json` | **frozen** `model::Index` | `model::SCHEMA_VERSION = 1` | mtime: `store::cache_valid` compares max file mtime |
-| `.repowalk/analysis.json` | v2 `analysis::Analysis` | `analysis::ANALYSIS_VERSION = 1` | version check only; a mismatch is a miss (`analysis::load`) |
+| `.repowalk/analysis.json` | v2 `analysis::Analysis` | `analysis::ANALYSIS_VERSION = 1` | version mismatch is a miss (`analysis::load`). Per-file `(mtime_nanos, size)` stamps and `learn::LEARN_REVISION` live in `analysis-stamps.json`; a stamp or revision miss re-analyzes |
 
 Both are written atomically (write `*.tmp`, then rename). `store::cache_path` /
 `store::load` / `store::save` own `index.json`; `analysis::analysis_path` /

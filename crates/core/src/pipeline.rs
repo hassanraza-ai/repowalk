@@ -108,9 +108,9 @@ fn build_index_report_from_files(
     let mut idx = Index::new(root.to_string_lossy());
     idx.files = files;
     progress("parse", 0, total);
-    for (done, file) in idx.files.iter().enumerate() {
-        let text = std::fs::read_to_string(root.join(&file.path))?;
-        let (symbols, sites, imports) = extract_symbols(&file.path, &file.lang, &text);
+    let parsed = extract_all(root, &idx.files, 0)?;
+    for (done, item) in parsed.into_iter().enumerate() {
+        let (symbols, sites, imports) = item?;
         idx.symbols.extend(symbols);
         idx.call_sites.extend(sites);
         idx.imports.extend(imports);
@@ -127,6 +127,43 @@ fn build_index_report_from_files(
         index: idx,
         unsupported,
     })
+}
+
+type ParsedFile = (Vec<Symbol>, Vec<CallSite>, Vec<Import>);
+
+/// Parse every file. `workers == 0` uses the default pool. Results come back
+/// in path order, which is the walk order, so symbol lists match a
+/// one-worker run. The progress callback stays on the caller: it is not
+/// `Sync` (UI code and tests close over a `RefCell`).
+fn extract_all(
+    root: &Path,
+    files: &[FileEntry],
+    workers: usize,
+) -> anyhow::Result<Vec<anyhow::Result<ParsedFile>>> {
+    let jobs: Vec<crate::parallel::FileJob> = files
+        .iter()
+        .map(|f| crate::parallel::FileJob::new(f.path.clone()))
+        .collect();
+    let langs: BTreeMap<String, String> = files
+        .iter()
+        .map(|f| (f.path.clone(), f.lang.clone()))
+        .collect();
+    let root = root.to_path_buf();
+    let parsed = crate::parallel::map_files(&jobs, workers, |job| {
+        let lang = langs
+            .get(job.path.as_str())
+            .map(String::as_str)
+            .unwrap_or("");
+        let text = match std::fs::read_to_string(root.join(job.path.as_str())) {
+            Ok(text) => text,
+            Err(err) => return Err(err),
+        };
+        Ok(extract_symbols(job.path.as_str(), lang, &text))
+    });
+    Ok(parsed
+        .into_iter()
+        .map(|item| item.map_err(anyhow::Error::from))
+        .collect())
 }
 
 /// Route one file through [`Lang::from_walk`] (R-27). Unsupported languages
@@ -344,7 +381,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{EdgeKind, SymbolKind};
+    use crate::model::{CallSite, EdgeKind, Import, Symbol, SymbolKind};
     use std::path::PathBuf;
 
     fn temp_root(tag: &str) -> PathBuf {
@@ -542,5 +579,54 @@ mod tests {
         assert_eq!(second.index.symbols.len(), first.index.symbols.len());
         assert!(second.unsupported.is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_worker_and_many_workers_extract_the_same_symbols() {
+        let root = temp_root("parallel-parse");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "fn alpha() { beta(); }\n").unwrap();
+        std::fs::write(root.join("src/b.rs"), "fn beta() { alpha(); }\n").unwrap();
+        std::fs::write(root.join("src/c.py"), "def gamma():\n    return alpha()\n").unwrap();
+        let files = crate::walk::walk(&root).unwrap();
+        let one = flatten(extract_all(&root, &files, 1).unwrap());
+        let many = flatten(extract_all(&root, &files, 4).unwrap());
+        assert_eq!(symbol_ids(&one.0), symbol_ids(&many.0));
+        assert_eq!(call_keys(&one.1), call_keys(&many.1));
+        assert_eq!(import_keys(&one.2), import_keys(&many.2));
+        assert!(one.0.iter().any(|s| s.name == "alpha"));
+        assert!(one.0.iter().any(|s| s.name == "gamma"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn symbol_ids(symbols: &[Symbol]) -> Vec<String> {
+        symbols.iter().map(|s| s.id.clone()).collect()
+    }
+
+    fn call_keys(sites: &[CallSite]) -> Vec<(String, String, usize)> {
+        sites
+            .iter()
+            .map(|c| (c.file.clone(), c.callee.clone(), c.line))
+            .collect()
+    }
+
+    fn import_keys(imports: &[Import]) -> Vec<(String, String)> {
+        imports
+            .iter()
+            .map(|i| (i.file.clone(), i.target.clone()))
+            .collect()
+    }
+
+    fn flatten(parsed: Vec<anyhow::Result<ParsedFile>>) -> ParsedFile {
+        let mut symbols = Vec::new();
+        let mut sites = Vec::new();
+        let mut imports = Vec::new();
+        for item in parsed {
+            let (s, c, i) = item.expect("readable fixture");
+            symbols.extend(s);
+            sites.extend(c);
+            imports.extend(i);
+        }
+        (symbols, sites, imports)
     }
 }

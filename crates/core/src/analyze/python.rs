@@ -20,7 +20,8 @@
 //!   access or `utf8_text` may panic.
 use std::collections::{BTreeMap, HashMap};
 
-use tree_sitter::{Node, Parser};
+use crate::syntax;
+use tree_sitter::Node;
 
 use crate::analysis::{
     Analysis, CfgEdge, CfgEdgeKind, CfgKind, CfgNode, Field, FunctionCfg, TypeEdge, TypeEdgeKind,
@@ -32,12 +33,7 @@ use super::{enclosing_symbol, snippet};
 
 /// Append Python variables/CFG/types/use-sites for `file` into `out`.
 pub fn analyze(file: &str, source: &str, symbols: &[Symbol], out: &mut Analysis) {
-    let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-    let mut parser = Parser::new();
-    if parser.set_language(&language).is_err() {
-        return;
-    }
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = syntax::parse_python(source) else {
         return;
     };
     let root = tree.root_node();
@@ -1373,6 +1369,7 @@ fn collect_cfgs(file: &str, source: &str, root: Node) -> Vec<FunctionCfg> {
             edges: b.edges,
             cyclomatic,
             max_nesting,
+            cognitive: crate::cognitive::score(f, source, crate::cognitive::Language::Python),
         });
     }
     out.sort_by(|a, b| a.symbol.cmp(&b.symbol));

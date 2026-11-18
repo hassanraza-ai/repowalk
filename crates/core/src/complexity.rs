@@ -21,6 +21,9 @@ pub struct Hotspot {
     pub line: usize,
     pub cyclomatic: u32,
     pub max_nesting: u32,
+    /// Sonar cognitive complexity. Ranking stays by [`Self::cyclomatic`]:
+    /// the two numbers answer different questions (paths vs. readability).
+    pub cognitive: u32,
 }
 
 /// Per-file complexity roll-up.
@@ -53,6 +56,7 @@ fn hotspot_of(cfg: &FunctionCfg) -> Hotspot {
         line,
         cyclomatic: cfg.cyclomatic,
         max_nesting: cfg.max_nesting,
+        cognitive: cfg.cognitive,
     }
 }
 
@@ -141,6 +145,7 @@ mod tests {
             edges: Vec::new(),
             cyclomatic,
             max_nesting,
+            cognitive: 0,
         }
     }
 
