@@ -2,7 +2,9 @@
 //! call sites, imports (plan §8.1).
 //! OWNER: RSK-4. Same Symbol conventions as parse_rust (id = "{path}:{start_line}").
 use crate::model::{CallSite, Import, Symbol, SymbolKind};
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
+use crate::syntax;
+use std::sync::OnceLock;
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 
 const DEFS_QUERY: &str = r#"
 (function_definition name: (identifier) @name) @def
@@ -21,25 +23,25 @@ const IMPORTS_QUERY: &str = r#"
 
 /// Extract symbols, call sites and imports from one Python source file.
 pub fn extract(source: &str, path: &str) -> (Vec<Symbol>, Vec<CallSite>, Vec<Import>) {
-    let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-    let mut parser = Parser::new();
-    parser
-        .set_language(&language)
-        .expect("tree-sitter-python version mismatch");
-    let tree = parser.parse(source, None).expect("python parse failed");
+    let Some(tree) = syntax::parse_python(source) else {
+        return (Vec::new(), Vec::new(), Vec::new());
+    };
     let root = tree.root_node();
+    let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+    static DEFS: OnceLock<Option<Query>> = OnceLock::new();
+    static CALLS: OnceLock<Option<Query>> = OnceLock::new();
+    static IMPORTS: OnceLock<Option<Query>> = OnceLock::new();
+    let defs_q = syntax::query(&DEFS, language.clone(), DEFS_QUERY).expect("valid defs query");
+    let calls_q = syntax::query(&CALLS, language.clone(), CALLS_QUERY).expect("valid calls query");
+    let imports_q = syntax::query(&IMPORTS, language, IMPORTS_QUERY).expect("valid imports query");
 
-    let defs_q = Query::new(&language, DEFS_QUERY).expect("valid defs query");
-    let calls_q = Query::new(&language, CALLS_QUERY).expect("valid calls query");
-    let imports_q = Query::new(&language, IMPORTS_QUERY).expect("valid imports query");
-
-    let mut symbols = extract_defs(&defs_q, root, source, path);
+    let mut symbols = extract_defs(defs_q, root, source, path);
     symbols.sort_by_key(|s| (s.start_line, s.name.clone()));
 
-    let mut call_sites = extract_calls(&calls_q, root, source, path);
+    let mut call_sites = extract_calls(calls_q, root, source, path);
     call_sites.sort_by_key(|c| (c.line, c.callee.clone()));
 
-    let imports = extract_imports(&imports_q, root, source, path);
+    let imports = extract_imports(imports_q, root, source, path);
 
     (symbols, call_sites, imports)
 }

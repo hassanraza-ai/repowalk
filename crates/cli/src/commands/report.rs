@@ -279,6 +279,7 @@ mod tests {
             edges: Vec::new(),
             cyclomatic: 4,
             max_nesting: 2,
+            cognitive: 0,
         });
         analysis.types.push(TypeNode {
             id: "src/a.rs:Person".into(),

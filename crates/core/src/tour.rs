@@ -215,7 +215,8 @@ fn why_line(idx: &Index, path: &str, fan_in: usize, fan_out: usize) -> String {
             .filter(|e| {
                 e.kind == EdgeKind::Call
                     && e.confidence != Confidence::Unresolved
-                    && e.caller == s.id
+                    && crate::flow::caller_symbol(idx, &e.caller, e.line)
+                        .is_some_and(|owner| owner.id == s.id)
             })
             .map(|e| e.callee.as_str())
             .collect::<BTreeSet<_>>()
@@ -401,5 +402,21 @@ mod tests {
 
         let empty = Index::new("/repo");
         assert!(tour(&empty, 10).is_empty());
+    }
+
+    #[test]
+    fn why_line_counts_a_call_whose_caller_is_the_function_name() {
+        let mut idx = diamond_index();
+        idx.edges.retain(|e| e.kind != crate::model::EdgeKind::Call);
+        idx.edges.push(call_edge("main", "src/b.rs:1"));
+        let why = tour(&idx, 10)
+            .into_iter()
+            .find(|item| item.path == "src/main.rs")
+            .unwrap()
+            .why;
+        assert!(
+            why.contains("calls 1"),
+            "name-keyed caller still belongs to main: {why}"
+        );
     }
 }

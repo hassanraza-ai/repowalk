@@ -93,6 +93,10 @@ pub struct FunctionCfg {
     /// Cyclomatic complexity: decision points + 1.
     pub cyclomatic: u32,
     pub max_nesting: u32,
+    /// Sonar cognitive complexity of this function. `0` when an older
+    /// `analysis.json` (written before the field existed) is loaded.
+    #[serde(default)]
+    pub cognitive: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -290,6 +294,7 @@ mod tests {
             edges: vec![],
             cyclomatic: 1,
             max_nesting: 0,
+            cognitive: 0,
         });
         let bytes = serde_json::to_vec(&a).expect("serialize");
         let back: Analysis = serde_json::from_slice(&bytes).expect("deserialize");

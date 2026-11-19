@@ -15,8 +15,10 @@ use crate::analysis::{
     TypeKind, TypeNode, UseKind, UseSite, VarKind, Variable,
 };
 use crate::model::{Symbol, SymbolKind};
+use crate::syntax;
 use std::collections::{BTreeMap, BTreeSet};
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
+use std::sync::OnceLock;
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 
 /// One query for every node kind the analyzer needs, dispatched by capture name.
 const ITEMS: &str = r#"
@@ -41,14 +43,7 @@ const ITEMS: &str = r#"
 
 /// Append Rust variables/CFG/types/use-sites for `file` into `out`.
 pub fn analyze(file: &str, source: &str, symbols: &[Symbol], out: &mut Analysis) {
-    let mut parser = Parser::new();
-    if parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .is_err()
-    {
-        return;
-    }
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = syntax::parse_rust(source) else {
         return;
     };
     let root = tree.root_node();
@@ -110,9 +105,10 @@ struct Items<'t> {
 }
 
 fn collect_items<'t>(root: Node<'t>, source: &str) -> Option<Items<'t>> {
-    let query = Query::new(&tree_sitter_rust::LANGUAGE.into(), ITEMS).ok()?;
+    static QUERY: OnceLock<Option<Query>> = OnceLock::new();
+    let query = syntax::query(&QUERY, tree_sitter_rust::LANGUAGE.into(), ITEMS)?;
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, root, source.as_bytes());
+    let mut matches = cursor.matches(query, root, source.as_bytes());
     let names = query.capture_names();
     let mut items = Items::default();
     while let Some(m) = matches.next() {
@@ -1298,6 +1294,7 @@ fn build_cfg(ctx: &Ctx, func: Node) -> FunctionCfg {
         edges: b.edges,
         cyclomatic: 1 + b.decisions + bools,
         max_nesting: b.max_nesting,
+        cognitive: crate::cognitive::score(func, ctx.source, crate::cognitive::Language::Rust),
     }
 }
 
@@ -1453,7 +1450,7 @@ fn use_kind_rank(k: UseKind) -> u8 {
 }
 
 /// Stable output order so goldens never churn.
-fn sort_analysis(out: &mut Analysis) {
+pub(crate) fn sort_analysis(out: &mut Analysis) {
     out.variables.sort_by(|a, b| {
         (a.file.as_str(), a.decl_line, a.name.as_str(), a.id.as_str()).cmp(&(
             b.file.as_str(),
