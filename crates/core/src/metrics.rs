@@ -61,13 +61,20 @@ pub fn compute(idx: &Index) -> Metrics {
     top_files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     top_files.truncate(10);
 
-    // Fan-in: distinct callers per callee symbol id.
+    // Fan-in: distinct callers per callee symbol id. Callers are stored as
+    // enclosing names; count the symbol they resolve to when we can, so two
+    // calls from the same function are one caller.
     let mut callers: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut caller_ids: Vec<String> = Vec::new();
     for e in &idx.edges {
+        let owned = crate::flow::caller_symbol(idx, &e.caller, e.line).map(|s| s.id.clone());
+        caller_ids.push(owned.unwrap_or_else(|| e.caller.clone()));
+    }
+    for (e, caller) in idx.edges.iter().zip(&caller_ids) {
         callers
             .entry(e.callee.as_str())
             .or_default()
-            .insert(e.caller.as_str());
+            .insert(caller.as_str());
     }
     let mut fan_in: Vec<(String, usize)> = callers
         .into_iter()
@@ -80,10 +87,10 @@ pub fn compute(idx: &Index) -> Metrics {
     let mut graph = DiGraph::<&str, ()>::new();
     let mut pairs: BTreeSet<(petgraph::graph::NodeIndex, petgraph::graph::NodeIndex)> =
         BTreeSet::new();
-    for e in &idx.edges {
+    for (e, caller) in idx.edges.iter().zip(&caller_ids) {
         let a = *node_of
-            .entry(e.caller.as_str())
-            .or_insert_with(|| graph.add_node(e.caller.as_str()));
+            .entry(caller.as_str())
+            .or_insert_with(|| graph.add_node(caller.as_str()));
         let b = *node_of
             .entry(e.callee.as_str())
             .or_insert_with(|| graph.add_node(e.callee.as_str()));
@@ -247,7 +254,19 @@ pub fn god_files(idx: &Index, analysis: &Analysis) -> Vec<GodFile> {
     // Distinct callees per caller file.
     let mut callees: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for e in &idx.edges {
-        let (file, _) = crate::complexity::parse_symbol_id(&e.caller);
+        if e.kind != crate::model::EdgeKind::Call {
+            continue;
+        }
+        let file = if let Some(owner) = crate::flow::caller_symbol(idx, &e.caller, e.line) {
+            owner.file.clone()
+        } else {
+            let (parsed, line) = crate::complexity::parse_symbol_id(&e.caller);
+            if line > 0 || idx.files.iter().any(|f| f.path == parsed) {
+                parsed
+            } else {
+                continue;
+            }
+        };
         callees.entry(file).or_default().insert(e.callee.clone());
     }
     for u in &analysis.uses {
@@ -777,5 +796,70 @@ mod tests {
         assert_eq!(m.god_files.len(), 1);
         assert_eq!(m.god_files[0].path, "src/big.rs");
         assert!(!m.complexity_by_module.is_empty());
+    }
+
+    #[test]
+    fn name_keyed_caller_counts_toward_its_file_and_closes_cycles() {
+        let mut idx = Index::new("/repo");
+        idx.files = (0..99)
+            .map(|i| file(&format!("src/f{i:02}.rs"), "rust", 10, false))
+            .collect();
+        idx.files.push(file("src/fan.rs", "rust", 10, false));
+        idx.symbols.push(Symbol {
+            id: "src/fan.rs:1".into(),
+            name: "bar".into(),
+            kind: SymbolKind::Function,
+            signature: "fn bar()".into(),
+            doc: String::new(),
+            start_line: 1,
+            end_line: 30,
+            container: None,
+            file: "src/fan.rs".into(),
+        });
+        idx.symbols.push(Symbol {
+            id: "src/other.rs:1".into(),
+            name: "other".into(),
+            kind: SymbolKind::Function,
+            signature: "fn other()".into(),
+            doc: String::new(),
+            start_line: 1,
+            end_line: 10,
+            container: None,
+            file: "src/other.rs".into(),
+        });
+        idx.files.push(file("src/other.rs", "rust", 10, false));
+        idx.edges = (0..25)
+            .map(|i| {
+                let mut hop = edge("bar", &format!("callee{i}"), Confidence::Exact);
+                hop.line = 4;
+                hop
+            })
+            .collect();
+        idx.edges.push({
+            let mut hop = edge("other", "src/fan.rs:1", Confidence::Exact);
+            hop.line = 2;
+            hop
+        });
+        idx.edges.push({
+            let mut hop = edge("bar", "src/other.rs:1", Confidence::Exact);
+            hop.line = 5;
+            hop
+        });
+
+        let gf = god_files(&idx, &Analysis::new());
+        let fan = gf
+            .iter()
+            .find(|g| g.path == "src/fan.rs")
+            .expect("fan file");
+        assert!(fan.fan_out >= 25, "name-keyed calls land on src/fan.rs");
+
+        let cycles = compute(&idx).cycles;
+        assert!(
+            cycles.iter().any(|cycle| {
+                cycle.contains(&"src/fan.rs:1".to_string())
+                    && cycle.contains(&"src/other.rs:1".to_string())
+            }),
+            "name/id edges still form a cycle: {cycles:?}"
+        );
     }
 }

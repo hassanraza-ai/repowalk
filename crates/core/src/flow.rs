@@ -3,6 +3,26 @@
 use crate::model::{EdgeKind, Index, Symbol};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+/// The symbol that owns a call edge's `caller`.
+///
+/// Resolved call edges store the enclosing function's **name** (or a file
+/// path when there is no enclosing function) plus the call's line. Callees
+/// are symbol ids. An id-shaped caller is returned as itself. A name is
+/// returned only when exactly one symbol with that name contains `line`.
+pub fn caller_symbol<'a>(idx: &'a Index, caller: &str, line: usize) -> Option<&'a Symbol> {
+    if let Some(sym) = idx.symbols.iter().find(|s| s.id == caller) {
+        return Some(sym);
+    }
+    let mut hits = idx
+        .symbols
+        .iter()
+        .filter(|s| s.name == caller && s.start_line <= line && line <= s.end_line);
+    match (hits.next(), hits.next()) {
+        (Some(hit), None) => Some(hit),
+        _ => None,
+    }
+}
+
 /// Canonical call-graph view for traversal. The pipeline keys a Call edge's
 /// `caller` by the enclosing *name* while `callee` is a symbol id, which
 /// truncates multi-hop BFS at the name/id boundary; this view rewrites

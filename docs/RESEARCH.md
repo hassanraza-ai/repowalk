@@ -129,21 +129,25 @@ machine, rustc 1.100.0:
 Median cold: 1455 ms. Median warm: 34 ms. Warm is a stamp hit (0 files
 re-analyzed) and was not the target.
 
-After reusing parsers and queries and running parse and analyze through
+After reusing parsers and queries, and running **parse** through
 `map_files`, the same example on the same corpus:
 
 | Run | Cold learn | Files re-analyzed | Warm learn |
 |---|---:|---:|---:|
-| 1 | 116 ms | 120 | 33 ms |
-| 2 | 114 ms | 120 | 32 ms |
-| 3 | 113 ms | 120 | 31 ms |
+| 1 | 231 ms | 120 | 32 ms |
+| 2 | 230 ms | 120 | 29 ms |
+| 3 | 226 ms | 120 | 28 ms |
 
-Median cold: 114 ms, 12.8 times faster than the 1455 ms median. Median
-warm: 32 ms, unchanged in any way that matters. The output is still
-path-ordered. A unit test checks that one worker and four workers extract
-the same symbols, calls, and imports. Rust files still re-sort the
-accumulated analysis after they are merged, which is what the single-threaded
-loop did, so mixed-language order does not start depending on the scheduler.
+Median cold: 230 ms, 6.3 times faster than the 1455 ms median. Median
+warm: 29 ms. A unit test checks that one worker and four workers extract
+the same symbols, calls, and imports.
+
+Analyze stays single-threaded and in path order. Rust type edges resolve
+against types already recorded for files earlier in that order. Running
+analyze in parallel, each file starting from an empty type table, dropped
+those edges. A faster number from that experiment (about 114 ms) was
+discarded with the experiment. Parser and query reuse is what the cold
+path was spending its time on; the parallel parse is the rest.
 
 The cold path still parses a Rust or Python file twice: once for symbols and
 calls, once for variables and control flow. TypeScript is analyzed twice for
@@ -186,12 +190,25 @@ Tour ranking uses that flag. The check is now the real Rust signature on a
 `.rs` file, and a non-comment `__main__` on a `.py` file. `main.rs`,
 `lib.rs`, and `__main__.py` are unchanged.
 
+Call edges store the enclosing function's **name** and the call's line.
+Callees are symbol ids. Explain, the tour's "calls N" line, fan-out, cycle
+detection, and the graph neighborhood were comparing that name to a symbol
+id, so callees and cycles disappeared. `flow::caller_symbol` resolves a
+name only when one symbol with that name contains the call line, and those
+views use it. An id-shaped caller still round-trips.
+
+A warm learn used to keep a type edge whose source file had not changed,
+even after the target file had. Editing `Bar` in `a.rs` left `b.rs` pointing
+at `a.rs:Bar`. Files that own an edge into a stale file are now re-analyzed,
+and the chain is followed until it stops growing.
+
 ## Plan, and what this branch carries out
 
 1. Record this research. Done, this file.
 2. Measure cold `learn` before touching the indexer. Done, table above.
-3. Reuse parsers and queries, and run the existing deterministic parallel
-   map on parse and analyze. Done. Re-measured.
+3. Reuse parsers and queries, and run the deterministic parallel map on
+   parse. Analyze stays in path order so cross-file type edges survive.
+   Done. Re-measured.
 4. Add cognitive complexity as a second number, not a replacement. Done, with
    tests taken from the Sonar examples (a `match` is 1, the nested
    `sumOfPrimes` shape is 7, boolean runs, `else if`, direct recursion, and

@@ -76,16 +76,16 @@ counts so the GUI progress view can show per-phase progress.
 | **walk** | enumerate files (same ignore/skip set as `build_index`) | file list + languages |
 | **parse** | per-file tree-sitter extraction, dispatched by `analyze::Lang`, in parallel | `Symbol` / `CallSite` / `Import` |
 | **resolve** | call + import edges (`resolve::resolve`, `resolve::resolve_imports`) | `Index::edges` |
-| **analyze** | per-file v2 analysis, in parallel; Rust files re-sort the accumulated buffer so order matches a single thread | `Analysis` |
+| **analyze** | per-file v2 analysis, in path order so a Rust file can link types declared by an earlier file | `Analysis` |
 | **cache** | atomic write of the versioned artifact | `.repowalk/analysis.json` |
 
 - `pipeline::build_index` remains the v1 spine: **walk → parse → resolve →
   timestamp → save** (`index.json`). The v2 learn run inserts **analyze**
   between resolve and cache and caches a *second* file (below).
-- Parse and analyze run through `parallel::map_files` (std scoped threads,
-  merged in path order so a 1-core run and a many-core run match). Each
-  thread reuses one tree-sitter parser per grammar, and each query is
-  compiled once per process.
+- Parse runs through `parallel::map_files` (std scoped threads, merged in
+  path order). Analyze stays in path order: Rust type edges resolve against
+  types already recorded for earlier files. Each thread reuses one
+  tree-sitter parser per grammar, and each query is compiled once.
 - Progress type: `LearnProgress { phase, done, total, variables, cfgs, types,
   uses }` is emitted by `learn::learn` at every phase boundary and once per file.
   The GUI additionally drives the v1 window through

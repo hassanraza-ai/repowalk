@@ -222,7 +222,8 @@ fn callers(ui: &mut egui::Ui, app: &mut App, idx: &Index, symbol_id: &str) {
 
     for (caller, line) in callers {
         // caller is a symbol id (`path:line`) or a bare file path.
-        let resolved = idx.symbols.iter().find(|s| s.id == caller);
+        let resolved = repowalk_core::flow::caller_symbol(idx, &caller, line)
+            .or_else(|| idx.symbols.iter().find(|s| s.id == caller));
         let label = match resolved {
             Some(s) => format!("{} ({}:{})", s.name, s.file, s.start_line),
             None => caller.clone(),
@@ -249,7 +250,11 @@ fn callees(ui: &mut egui::Ui, app: &mut App, idx: &Index, symbol_id: &str) {
     let mut callees: Vec<(String, usize)> = idx
         .edges
         .iter()
-        .filter(|e| e.kind == EdgeKind::Call && e.caller == symbol_id)
+        .filter(|e| {
+            e.kind == EdgeKind::Call
+                && repowalk_core::flow::caller_symbol(idx, &e.caller, e.line)
+                    .is_some_and(|owner| owner.id == symbol_id)
+        })
         .map(|e| (e.callee.clone(), e.line))
         .collect();
     callees.sort();

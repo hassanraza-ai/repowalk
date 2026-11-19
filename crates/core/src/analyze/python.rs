@@ -317,7 +317,23 @@ impl<'a> Visitor<'a> {
         }
     }
 
-    fn resolve_symbol(&self, name: &str) -> Option<String> {
+    fn resolve_symbol(&self, name: &str, line: usize) -> Option<String> {
+        // A call inside `class B: def run` should bind to B's method, not the
+        // first `run` in the file (often an earlier class).
+        if line > 0 {
+            let enclosing = enclosing_symbol(self.symbols, line);
+            if let Some(owner) = self.symbols.iter().find(|s| s.id == enclosing) {
+                if let Some(container) = owner.container.as_deref() {
+                    if let Some(hit) = self
+                        .symbols
+                        .iter()
+                        .find(|s| s.name == name && s.container.as_deref() == Some(container))
+                    {
+                        return Some(hit.id.clone());
+                    }
+                }
+            }
+        }
         self.symbols
             .iter()
             .find(|s| s.name == name && s.file == self.file)
@@ -344,8 +360,8 @@ impl<'a> Visitor<'a> {
         if callee.is_empty() {
             return;
         }
-        let target = self.resolve_symbol(&callee).unwrap_or(callee);
         let line = call.start_position().row + 1;
+        let target = self.resolve_symbol(&callee, line).unwrap_or(callee);
         let col = call.start_position().column + 1;
         self.push_use(target, line, col, UseKind::Call);
     }
@@ -356,8 +372,8 @@ impl<'a> Visitor<'a> {
             if n.kind() == "identifier" {
                 let name = node_text(n, self.source);
                 if !name.is_empty() {
-                    let target = self.resolve_symbol(&name).unwrap_or(name);
                     let line = n.start_position().row + 1;
+                    let target = self.resolve_symbol(&name, line).unwrap_or(name);
                     let col = n.start_position().column + 1;
                     self.push_use(target, line, col, UseKind::TypeRef);
                 }
@@ -479,8 +495,8 @@ impl<'a> Visitor<'a> {
         // `obj.attr`: a field access; the object expression is still read.
         let name = node_text(attr, self.source);
         if !name.is_empty() {
-            let target_id = self.resolve_symbol(&name).unwrap_or(name);
             let line = node.start_position().row + 1;
+            let target_id = self.resolve_symbol(&name, line).unwrap_or(name);
             let col = node.start_position().column + 1;
             self.push_use(target_id, line, col, UseKind::FieldAccess);
         }
@@ -994,7 +1010,7 @@ impl<'a> Visitor<'a> {
             let target = targets
                 .get(&key)
                 .cloned()
-                .or_else(|| self.resolve_symbol(&e.name))
+                .or_else(|| self.resolve_symbol(&e.name, e.line))
                 .unwrap_or_else(|| e.name.clone());
             let kind = if e.is_field {
                 UseKind::FieldAccess
@@ -1610,5 +1626,23 @@ mod tests {
         let mut out = Analysis::new();
         analyze("bad.py", "def (:\n    x = = 1\n class", &[], &mut out);
         // No assertions beyond "did not panic"; empty symbol list is tolerated.
+    }
+
+    #[test]
+    fn call_inside_a_method_resolves_to_that_class_not_an_earlier_one() {
+        let src = "\
+class A:\n    \
+    def run(self):\n        \
+        pass\n\
+class B:\n    \
+    def run(self):\n        \
+        self.run()\n";
+        let out = analyze_src(src);
+        let b_run = out
+            .uses
+            .iter()
+            .find(|u| u.kind == crate::analysis::UseKind::Call && u.line > 2)
+            .expect("call inside B.run");
+        assert_eq!(b_run.target, "t.py:5", "B.run, not the earlier A.run");
     }
 }

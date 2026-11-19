@@ -196,23 +196,51 @@ pub fn learn(root: &Path, progress: &dyn Fn(LearnProgress)) -> anyhow::Result<(I
         None => BTreeMap::new(),
     };
 
-    // A file needs re-analysis when it is analyzable and its stamp changed (or
-    // it is new). A file is "stale" — its cached entries must be dropped — when
-    // it changed, or when it is not analyzable any more (e.g. extension swap).
-    let needs: Vec<&FileEntry> = files
-        .iter()
-        .filter(|f| {
-            crate::analyze::Lang::from_walk(&f.lang).is_some()
-                && old_stamps.get(f.path.as_str()) != current.get(f.path.as_str())
-        })
-        .collect();
-    let stale: BTreeSet<String> = files
+    // A file is "stale" — its cached entries must be dropped — when it
+    // changed, or when it is not analyzable any more (e.g. extension swap).
+    // A file also becomes stale when a type edge it owns points at a type in
+    // a stale file: the target id may have moved or disappeared, and keeping
+    // the edge would describe a type that is no longer there.
+    let mut stale: BTreeSet<String> = files
         .iter()
         .filter(|f| {
             crate::analyze::Lang::from_walk(&f.lang).is_none()
                 || old_stamps.get(f.path.as_str()) != current.get(f.path.as_str())
         })
         .map(|f| f.path.clone())
+        .collect();
+    if let Some(old) = &cached {
+        loop {
+            let extra: Vec<String> = old
+                .type_edges
+                .iter()
+                .filter_map(|edge| {
+                    let from_file = symbol_file(&edge.from);
+                    let to_file = symbol_file(&edge.to);
+                    if from_file != to_file
+                        && stale.contains(&to_file)
+                        && current.contains_key(&from_file)
+                        && !stale.contains(&from_file)
+                    {
+                        Some(from_file)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if extra.is_empty() {
+                break;
+            }
+            stale.extend(extra);
+        }
+    }
+    // A file needs re-analysis when it is analyzable and its stamp changed
+    // (or it is new), or a stale target forced it back into the set above.
+    let needs: Vec<&FileEntry> = files
+        .iter()
+        .filter(|f| {
+            crate::analyze::Lang::from_walk(&f.lang).is_some() && stale.contains(f.path.as_str())
+        })
         .collect();
 
     // Seed from the cached artifact, keeping only entries for files that still
@@ -255,39 +283,21 @@ pub fn learn(root: &Path, progress: &dyn Fn(LearnProgress)) -> anyhow::Result<(I
 
     let total = needs.len();
     emit(progress, "analyze", 0, total, &analysis);
-    // Parse and analyze off the UI thread pool. Merge in path order, and
-    // re-apply the Rust analyzer's whole-buffer sort after each Rust file so
-    // the artifact matches the old single-threaded append order.
-    let jobs: Vec<crate::parallel::FileJob> = needs
-        .iter()
-        .map(|f| crate::parallel::FileJob::new(f.path.clone()))
-        .collect();
-    let langs: BTreeMap<String, crate::analyze::Lang> = needs
-        .iter()
-        .filter_map(|f| crate::analyze::Lang::from_walk(&f.lang).map(|lang| (f.path.clone(), lang)))
-        .collect();
-    let root_buf = root.to_path_buf();
-    let partials = crate::parallel::map_files(&jobs, 0, |job| -> anyhow::Result<_> {
-        let lang = langs[job.path.as_str()];
-        let source = std::fs::read_to_string(root_buf.join(job.path.as_str()))?;
+    // Sequential on purpose. Rust type edges resolve against types already
+    // in `analysis` (files earlier in path order). A parallel merge would
+    // hand each file an empty type table and drop those edges. Parsing stays
+    // parallel; the parsers and queries are reused, which is where the time
+    // went.
+    for (i, f) in needs.iter().enumerate() {
+        let Some(lang) = crate::analyze::Lang::from_walk(&f.lang) else {
+            continue;
+        };
+        let source = std::fs::read_to_string(root.join(f.path.as_str()))?;
         let symbols = symbols_by_file
-            .get(job.path.as_str())
+            .get(f.path.as_str())
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let mut partial = Analysis::new();
-        crate::analyze::analyze(job.path.as_str(), lang, &source, symbols, &mut partial);
-        Ok((lang, partial))
-    });
-    for (i, item) in partials.into_iter().enumerate() {
-        let (lang, partial) = item?;
-        analysis.variables.extend(partial.variables);
-        analysis.cfgs.extend(partial.cfgs);
-        analysis.types.extend(partial.types);
-        analysis.type_edges.extend(partial.type_edges);
-        analysis.uses.extend(partial.uses);
-        if lang == crate::analyze::Lang::Rust {
-            crate::analyze::rust::sort_analysis(&mut analysis);
-        }
+        crate::analyze::analyze(f.path.as_str(), lang, &source, symbols, &mut analysis);
         emit(progress, "analyze", i + 1, total, &analysis);
     }
 
@@ -954,5 +964,33 @@ mod tests {
             v["version"] = serde_json::json!(crate::analysis::ANALYSIS_VERSION + 1);
             std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
         });
+    }
+
+    #[test]
+    fn editing_a_type_drops_edges_that_pointed_at_it() {
+        let root = temp_root("type-dep");
+        std::fs::write(root.join("a.rs"), "pub struct Bar { n: i32 }\n").unwrap();
+        std::fs::write(
+            root.join("b.rs"),
+            "struct Foo { item: Bar }\nfn use_it(v: Bar) {}\n",
+        )
+        .unwrap();
+        let (_, first) = learn(&root, &|_| {}).unwrap();
+        assert!(
+            first
+                .type_edges
+                .iter()
+                .any(|e| e.from.contains("b.rs") && e.to.contains("a.rs")),
+            "b.rs should link to Bar in a.rs: {:?}",
+            first.type_edges
+        );
+        std::fs::write(root.join("a.rs"), "pub struct Baz { n: i32 }\n").unwrap();
+        let (_, second) = learn(&root, &|_| {}).unwrap();
+        assert!(
+            second.type_edges.iter().all(|e| e.to != "a.rs:Bar"),
+            "stale edge to the old Bar survived: {:?}",
+            second.type_edges
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
