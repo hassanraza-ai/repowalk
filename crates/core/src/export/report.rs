@@ -25,6 +25,7 @@ pub fn markdown(index: &Index, analysis: &Analysis) -> String {
 
     overview(&mut out, index, analysis);
     module_map(&mut out, analysis);
+    module_coupling(&mut out, analysis);
     complexity_section(&mut out, analysis);
     unused_variables(&mut out, analysis);
     type_inventory(&mut out, analysis);
@@ -107,6 +108,32 @@ fn module_map(out: &mut String, analysis: &Analysis) {
     }
 }
 
+/// Martin instability over import edges. Submodule edges are not coupling.
+fn module_coupling(out: &mut String, analysis: &Analysis) {
+    out.push_str("## Module coupling\n\n");
+    let rows = crate::modules::coupling(&analysis.module_edges);
+    if rows.is_empty() {
+        out.push_str("_No import edges to score._\n\n");
+        return;
+    }
+    out.push_str(
+        "Instability is `I = Ce / (Ca + Ce)` over import edges. \
+         Ca is how many modules import this one; Ce is how many it imports. \
+         Submodule edges are containment and are not counted.\n\n",
+    );
+    out.push_str("| module | Ca | Ce | I |\n|---|---|---|---|\n");
+    for row in rows.iter().take(USES_LIMIT) {
+        out.push_str(&format!(
+            "| `{}` | {} | {} | {} |\n",
+            row.id,
+            row.ca,
+            row.ce,
+            row.instability_label()
+        ));
+    }
+    out.push('\n');
+}
+
 /// True when `complexity` looks like a still-empty stub: it produced nothing
 /// even though raw CFGs exist (any real implementation would non-empty per-file).
 fn complexity_is_stub(analysis: &Analysis) -> bool {
@@ -138,6 +165,7 @@ fn complexity_section(out: &mut String, analysis: &Analysis) {
                         h.line,
                         h.cyclomatic,
                         h.max_nesting,
+                        h.cognitive,
                     )
                 })
                 .collect(),
@@ -149,11 +177,14 @@ fn complexity_section(out: &mut String, analysis: &Analysis) {
     };
 
     out.push_str("### Hotspots\n\n");
-    out.push_str("| symbol | file | line | cyclomatic | nesting |\n|---|---|---|---|---|\n");
-    for (symbol, file, line, cyclomatic, nesting) in hotspots.iter().take(HOTSPOT_LIMIT) {
+    out.push_str(
+        "| symbol | file | line | cyclomatic | nesting | cognitive |\n|---|---|---|---|---|---|\n",
+    );
+    for (symbol, file, line, cyclomatic, nesting, cognitive) in hotspots.iter().take(HOTSPOT_LIMIT)
+    {
         out.push_str(&format!(
-            "| `{}` | `{}` | {} | {} | {} |\n",
-            symbol, file, line, cyclomatic, nesting
+            "| `{}` | `{}` | {} | {} | {} | {} |\n",
+            symbol, file, line, cyclomatic, nesting, cognitive
         ));
     }
     out.push('\n');
@@ -166,14 +197,21 @@ fn complexity_section(out: &mut String, analysis: &Analysis) {
     out.push('\n');
 }
 
-/// `(symbol, file, line, cyclomatic, nesting)`, most complex first.
-fn fallback_hotspots(analysis: &Analysis) -> Vec<(String, String, usize, u32, u32)> {
-    let mut rows: Vec<(String, String, usize, u32, u32)> = analysis
+/// `(symbol, file, line, cyclomatic, nesting, cognitive)`, most complex first.
+fn fallback_hotspots(analysis: &Analysis) -> Vec<(String, String, usize, u32, u32, u32)> {
+    let mut rows: Vec<(String, String, usize, u32, u32, u32)> = analysis
         .cfgs
         .iter()
         .map(|c| {
             let (file, line) = complexity::parse_symbol_id(&c.symbol);
-            (c.symbol.clone(), file, line, c.cyclomatic, c.max_nesting)
+            (
+                c.symbol.clone(),
+                file,
+                line,
+                c.cyclomatic,
+                c.max_nesting,
+                c.cognitive,
+            )
         })
         .collect();
     rows.sort_by(|a, b| {

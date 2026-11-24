@@ -449,7 +449,10 @@ fn hotspot_list(ui: &mut egui::Ui, app: &mut App, rows: &[Hotspot]) {
             .open_file
             .as_deref()
             .is_some_and(|p| p == h.file.as_str() && app.jump_line == Some(h.line));
-        let meta = format!("cyc {} · nest {}", h.cyclomatic, h.max_nesting);
+        let meta = format!(
+            "cyc {} · cog {} · nest {}",
+            h.cyclomatic, h.cognitive, h.max_nesting
+        );
         let resp = data_row(
             ui,
             selected,
@@ -468,8 +471,8 @@ fn hotspot_list(ui: &mut egui::Ui, app: &mut App, rows: &[Hotspot]) {
             goto(app, h.file.clone(), Some(h.line));
         }
         resp.on_hover_text(format!(
-            "{} · line {}\ncyclomatic {} · max nesting {}",
-            h.symbol, h.line, h.cyclomatic, h.max_nesting
+            "{} · line {}\ncyclomatic {} · cognitive {} · max nesting {}",
+            h.symbol, h.line, h.cyclomatic, h.cognitive, h.max_nesting
         ));
     }
     if rows.len() > MAX_HOTSPOTS {

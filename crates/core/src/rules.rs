@@ -461,6 +461,7 @@ mod tests {
             edges: Vec::new(),
             cyclomatic,
             max_nesting: 0,
+            cognitive: 0,
         }
     }
 

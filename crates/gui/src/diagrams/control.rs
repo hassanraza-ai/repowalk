@@ -214,8 +214,8 @@ fn picker(
                     });
                 });
                 let row = row.on_hover_text(format!(
-                    "{}\n{name}\ncyclomatic {} · nesting {}",
-                    cfg.symbol, cfg.cyclomatic, cfg.max_nesting
+                    "{}\n{name}\ncyclomatic {} · cognitive {} · nesting {}",
+                    cfg.symbol, cfg.cyclomatic, cfg.cognitive, cfg.max_nesting
                 ));
                 if row.clicked() {
                     clicked = Some(cfg.symbol.clone());
@@ -372,6 +372,16 @@ fn badge_strip(ui: &mut egui::Ui, cfg: &FunctionCfg, name: &str, reset: &mut boo
                 "nesting",
                 cfg.max_nesting,
                 if cfg.max_nesting > 4 {
+                    theme::WARNING
+                } else {
+                    theme::INFO
+                },
+            );
+            badge(
+                ui,
+                "cognitive",
+                cfg.cognitive,
+                if cfg.cognitive > 15 {
                     theme::WARNING
                 } else {
                     theme::INFO
@@ -983,6 +993,7 @@ mod tests {
             edges,
             cyclomatic: 1,
             max_nesting: 0,
+            cognitive: 0,
         }
     }
 

@@ -2,7 +2,9 @@
 //! OWNER: RSK-3. Produces the same Symbol shapes as parse_py via shared conventions:
 //! id = "{path}:{start_line}", start_line = node.start_position.row + 1.
 use crate::model::{CallSite, Import, Symbol, SymbolKind};
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
+use crate::syntax;
+use std::sync::OnceLock;
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 
 const DEFS: &str = r#"
 (function_item name: (identifier) @name) @def
@@ -27,14 +29,7 @@ const USES: &str = r#"
 
 /// Extract symbols, call sites and imports from one Rust source file.
 pub fn extract(source: &str, path: &str) -> (Vec<Symbol>, Vec<CallSite>, Vec<Import>) {
-    let mut parser = Parser::new();
-    if parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .is_err()
-    {
-        return (Vec::new(), Vec::new(), Vec::new());
-    }
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = syntax::parse_rust(source) else {
         return (Vec::new(), Vec::new(), Vec::new());
     };
     let root = tree.root_node();
@@ -46,11 +41,12 @@ pub fn extract(source: &str, path: &str) -> (Vec<Symbol>, Vec<CallSite>, Vec<Imp
 }
 
 fn extract_defs(root: Node, source: &str, path: &str) -> Vec<Symbol> {
-    let Ok(query) = Query::new(&tree_sitter_rust::LANGUAGE.into(), DEFS) else {
+    static QUERY: OnceLock<Option<Query>> = OnceLock::new();
+    let Some(query) = syntax::query(&QUERY, tree_sitter_rust::LANGUAGE.into(), DEFS) else {
         return Vec::new();
     };
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, root, source.as_bytes());
+    let mut matches = cursor.matches(query, root, source.as_bytes());
     let names = query.capture_names();
     let mut out = Vec::new();
     while let Some(m) = matches.next() {
@@ -81,11 +77,12 @@ fn extract_defs(root: Node, source: &str, path: &str) -> Vec<Symbol> {
 }
 
 fn extract_calls(root: Node, source: &str, path: &str) -> Vec<CallSite> {
-    let Ok(query) = Query::new(&tree_sitter_rust::LANGUAGE.into(), CALLS) else {
+    static QUERY: OnceLock<Option<Query>> = OnceLock::new();
+    let Some(query) = syntax::query(&QUERY, tree_sitter_rust::LANGUAGE.into(), CALLS) else {
         return Vec::new();
     };
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, root, source.as_bytes());
+    let mut matches = cursor.matches(query, root, source.as_bytes());
     let names = query.capture_names();
     let mut out = Vec::new();
     while let Some(m) = matches.next() {
@@ -109,11 +106,12 @@ fn extract_calls(root: Node, source: &str, path: &str) -> Vec<CallSite> {
 }
 
 fn extract_imports(root: Node, source: &str, path: &str) -> Vec<Import> {
-    let Ok(query) = Query::new(&tree_sitter_rust::LANGUAGE.into(), USES) else {
+    static QUERY: OnceLock<Option<Query>> = OnceLock::new();
+    let Some(query) = syntax::query(&QUERY, tree_sitter_rust::LANGUAGE.into(), USES) else {
         return Vec::new();
     };
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, root, source.as_bytes());
+    let mut matches = cursor.matches(query, root, source.as_bytes());
     let names = query.capture_names();
     let mut out = Vec::new();
     while let Some(m) = matches.next() {

@@ -179,6 +179,7 @@ fn schema_roundtrips_a_populated_analysis() {
         }],
         cyclomatic: 1,
         max_nesting: 0,
+        cognitive: 0,
     });
 
     let text = serde_json::to_string(&a).expect("serialize");

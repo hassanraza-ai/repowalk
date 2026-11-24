@@ -734,10 +734,13 @@ fn neighbours(idx: &Index, id: &str) -> (Vec<String>, Vec<String>) {
     let mut callers = Vec::new();
     let mut callees = Vec::new();
     for e in &idx.edges {
+        let caller = repowalk_core::flow::caller_symbol(idx, &e.caller, e.line)
+            .map(|s| s.id.clone())
+            .unwrap_or_else(|| e.caller.clone());
         if e.callee == id {
-            callers.push(display_name(idx, &e.caller));
+            callers.push(display_name(idx, &caller));
         }
-        if e.caller == id {
+        if caller == id {
             callees.push(display_name(idx, &e.callee));
         }
     }

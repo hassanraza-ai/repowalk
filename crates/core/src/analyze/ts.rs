@@ -15,17 +15,13 @@ use crate::analysis::{
     TypeKind, TypeNode, UseKind, UseSite, VarKind, Variable,
 };
 use crate::model::Symbol;
+use crate::syntax::{self, ScriptKind};
 use std::collections::HashSet;
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
 /// Append TS/JS variables/CFG/types/use-sites for `file` into `out`.
 pub fn analyze(file: &str, source: &str, symbols: &[Symbol], out: &mut Analysis) {
-    let language: tree_sitter::Language = pick_language(file);
-    let mut parser = Parser::new();
-    if parser.set_language(&language).is_err() {
-        return;
-    }
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = syntax::parse_script(script_kind(file), source) else {
         return;
     };
     let root = tree.root_node();
@@ -35,19 +31,8 @@ pub fn analyze(file: &str, source: &str, symbols: &[Symbol], out: &mut Analysis)
 }
 
 /// Map a path to the grammar that can parse it.
-fn pick_language(file: &str) -> tree_sitter::Language {
-    let lower = file.to_ascii_lowercase();
-    if lower.ends_with(".tsx") {
-        tree_sitter_typescript::LANGUAGE_TSX.into()
-    } else if lower.ends_with(".js")
-        || lower.ends_with(".jsx")
-        || lower.ends_with(".mjs")
-        || lower.ends_with(".cjs")
-    {
-        tree_sitter_javascript::LANGUAGE.into()
-    } else {
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-    }
+fn script_kind(file: &str) -> ScriptKind {
+    syntax::script_kind(file)
 }
 
 /// A declared variable plus the byte offset of its name (to exclude the decl
@@ -609,6 +594,11 @@ impl<'a> Analyzer<'a> {
             edges,
             cyclomatic: decisions + 1,
             max_nesting,
+            cognitive: crate::cognitive::score(
+                node,
+                self.source,
+                crate::cognitive::Language::TypeScript,
+            ),
         });
     }
 

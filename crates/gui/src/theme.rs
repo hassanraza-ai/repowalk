@@ -164,15 +164,19 @@ pub const DANGER: Color32 = DARK.danger;
 pub const INFO: Color32 = DARK.info;
 
 // ── Module palette (deterministic 8-color, plan §4.4) ──────────────────────
+/// Okabe–Ito palette, which stays distinguishable for the common forms of
+/// color-vision deficiency. Black is the eighth Okabe–Ito swatch; it is
+/// replaced with a light neutral so a module is still visible on the dark
+/// graph surface.
 pub const MODULE_PALETTE: [Color32; 8] = [
-    Color32::from_rgb(0x61, 0xAF, 0xEF),
-    Color32::from_rgb(0x98, 0xC3, 0x79),
-    Color32::from_rgb(0xE5, 0xC0, 0x7B),
-    Color32::from_rgb(0xE0, 0x6C, 0x75),
-    Color32::from_rgb(0xC6, 0x78, 0xDD),
-    Color32::from_rgb(0x56, 0xB6, 0xC2),
-    Color32::from_rgb(0xD1, 0x9A, 0x66),
-    Color32::from_rgb(0xAB, 0xB2, 0xBF),
+    Color32::from_rgb(0x56, 0xB4, 0xE9),
+    Color32::from_rgb(0x00, 0x9E, 0x73),
+    Color32::from_rgb(0xE6, 0x9F, 0x00),
+    Color32::from_rgb(0xF0, 0xE4, 0x42),
+    Color32::from_rgb(0x00, 0x72, 0xB2),
+    Color32::from_rgb(0xD5, 0x5E, 0x00),
+    Color32::from_rgb(0xCC, 0x79, 0xA7),
+    Color32::from_rgb(0xEE, 0xEE, 0xEE),
 ];
 
 // ── Spacing (4pt base, 8pt rhythm) ─────────────────────────────────────────
@@ -632,5 +636,19 @@ mod tests {
         assert_eq!(*ThemeMode::Light.palette(), LIGHT);
         assert_ne!(DARK.surface, LIGHT.surface);
         assert_ne!(DARK.text, LIGHT.text);
+    }
+
+    #[test]
+    fn module_palette_is_eight_distinct_colors_visible_on_the_dark_surface() {
+        let mut seen = Vec::new();
+        for color in MODULE_PALETTE {
+            assert!(!seen.contains(&color), "duplicate module color {color:?}");
+            seen.push(color);
+            assert!(
+                contrast(color, DARK.background) >= 3.0,
+                "module color {color:?} is hard to see on the dark background"
+            );
+        }
+        assert_eq!(seen.len(), 8);
     }
 }

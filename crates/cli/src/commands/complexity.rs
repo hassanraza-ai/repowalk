@@ -55,11 +55,11 @@ fn table_functions(rows: &[Hotspot]) -> String {
         ));
         return out;
     }
-    out.push_str("  symbol  cyclomatic  nesting\n");
+    out.push_str("  symbol  cyclomatic  nesting  cognitive\n");
     for h in rows {
         out.push_str(&format!(
-            "  {}  {}  {}\n",
-            h.symbol, h.cyclomatic, h.max_nesting
+            "  {}  {}  {}  {}\n",
+            h.symbol, h.cyclomatic, h.max_nesting, h.cognitive
         ));
     }
     out
@@ -92,12 +92,13 @@ fn json_functions(rows: &[Hotspot]) -> String {
         .iter()
         .map(|h| {
             format!(
-                "{{\"symbol\":{},\"file\":{},\"line\":{},\"cyclomatic\":{},\"max_nesting\":{}}}",
+                "{{\"symbol\":{},\"file\":{},\"line\":{},\"cyclomatic\":{},\"max_nesting\":{},\"cognitive\":{}}}",
                 json::string(&h.symbol),
                 json::string(&h.file),
                 h.line,
                 h.cyclomatic,
-                h.max_nesting
+                h.max_nesting,
+                h.cognitive
             )
         })
         .collect();
@@ -132,6 +133,7 @@ mod tests {
             edges: Vec::new(),
             cyclomatic,
             max_nesting: nesting,
+            cognitive: 0,
         }
     }
 

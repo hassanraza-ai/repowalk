@@ -26,11 +26,14 @@ pub fn shortest_call_path(idx: &Index, a: &str, b: &str) -> Option<Vec<String>> 
 pub fn neighborhood(idx: &Index, focus: &str) -> BTreeSet<String> {
     let mut keep: BTreeSet<String> = BTreeSet::from([focus.to_string()]);
     for e in &idx.edges {
-        if e.caller == focus {
+        let caller = repowalk_core::flow::caller_symbol(idx, &e.caller, e.line)
+            .map(|s| s.id.as_str())
+            .unwrap_or(e.caller.as_str());
+        if caller == focus {
             keep.insert(e.callee.clone());
         }
         if e.callee == focus {
-            keep.insert(e.caller.clone());
+            keep.insert(caller.to_string());
         }
     }
     keep
