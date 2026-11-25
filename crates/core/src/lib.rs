@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod model;
 pub mod modules;
 pub mod parallel;
+pub mod parse_go;
 pub mod parse_py;
 pub mod parse_rust;
 pub mod pipeline;

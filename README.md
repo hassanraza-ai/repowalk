@@ -54,7 +54,7 @@ repowalk is a complement to AI: the verification layer you can check AI-generate
 ### Export
 - Window to **PNG**; tour + health, or the **architecture report**, to Markdown; and the call-graph, types and modules diagrams to **Mermaid**, **Graphviz DOT** or **SVG**. The GUI and the CLI render from the same core emitters, so a file you export and what the terminal prints cannot drift.
 
-**Supported languages:** Rust, Python, TypeScript and JavaScript — each with golden tests that run in `cargo test`.
+**Supported languages:** Rust, Python, TypeScript, JavaScript, and Go — each with tests that run in `cargo test`.
 
 ---
 
@@ -100,7 +100,7 @@ repowalk flow A B ./repo             # A→B trace with hop confidence (--from S
 
 # the v2 surface (--json where noted, for scripts)
 repowalk report ./repo               # the architecture report, Markdown (--json for the data)
-repowalk graph --format mermaid --scope call ./repo     # mermaid | dot | svg
+repowalk graph --format mermaid --scope call ./repo     # mermaid | dot | svg | png
 repowalk graph --format dot --scope cfg --symbol f ./repo
 repowalk variables src/main.rs ./repo --json
 repowalk complexity --by function --top 20 ./repo --json

@@ -22,6 +22,7 @@ pub enum Language {
     Rust,
     Python,
     TypeScript,
+    Go,
 }
 
 /// Cognitive complexity of one function-like node.
@@ -117,7 +118,7 @@ fn named<'t>(node: Node<'t>) -> Vec<Node<'t>> {
 fn is_if(node: Node, lang: Language) -> bool {
     match lang {
         Language::Rust => node.kind() == "if_expression",
-        Language::Python | Language::TypeScript => node.kind() == "if_statement",
+        Language::Python | Language::TypeScript | Language::Go => node.kind() == "if_statement",
     }
 }
 
@@ -149,6 +150,13 @@ fn is_structural(node: Node, lang: Language) -> bool {
                 | "catch_clause"
                 | "ternary_expression"
         ),
+        Language::Go => matches!(
+            node.kind(),
+            "for_statement"
+                | "expression_switch_statement"
+                | "type_switch_statement"
+                | "select_statement"
+        ),
     }
 }
 
@@ -156,6 +164,7 @@ fn is_lambda(node: Node, lang: Language) -> bool {
     match lang {
         Language::Rust => node.kind() == "closure_expression",
         Language::Python => node.kind() == "lambda",
+        Language::Go => node.kind() == "func_literal",
         Language::TypeScript => {
             matches!(
                 node.kind(),
@@ -169,6 +178,7 @@ fn owns_own_cfg(node: Node, lang: Language) -> bool {
     match lang {
         Language::Rust => matches!(node.kind(), "function_item" | "function_signature_item"),
         Language::Python => node.kind() == "function_definition",
+        Language::Go => matches!(node.kind(), "function_declaration" | "method_declaration"),
         Language::TypeScript => match node.kind() {
             "function_declaration" | "generator_function_declaration" | "method_definition" => true,
             "arrow_function" | "function_expression" | "generator_function" => {

@@ -58,6 +58,7 @@ fn lang_of(path: &Path) -> String {
         "sh" | "bash" => "shell".to_string(),
         "js" | "mjs" | "cjs" => "javascript".to_string(),
         "ts" | "tsx" => "typescript".to_string(),
+        "go" => "go".to_string(),
         "html" => "html".to_string(),
         "css" => "css".to_string(),
         "c" | "h" => "c".to_string(),

@@ -176,6 +176,7 @@ fn extract_symbols(
     match Lang::from_walk(lang) {
         Some(Lang::Rust) => crate::parse_rust::extract(source, path),
         Some(Lang::Python) => crate::parse_py::extract(source, path),
+        Some(Lang::Go) => crate::parse_go::extract(source, path),
         Some(lang @ (Lang::TypeScript | Lang::JavaScript)) => {
             extract_ts_via_analyze(path, lang, source)
         }
@@ -543,7 +544,7 @@ mod tests {
     #[test]
     fn unsupported_language_files_are_reported_explicitly() {
         let root = temp_root("unsupported");
-        std::fs::write(root.join("main.go"), "package main\n\nfunc main() {}\n").unwrap();
+        std::fs::write(root.join("main.zig"), "pub fn main() void {}\n").unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("src/lib.rs"),
@@ -552,15 +553,15 @@ mod tests {
         .unwrap();
 
         let report = build_index_with_report(&root, &|_| {}).unwrap();
-        let go = report
+        let zig = report
             .unsupported
             .iter()
-            .find(|u| u.language == "go")
-            .expect("a `.go` file must be reported as not analyzed");
-        assert_eq!(go.files, 1);
+            .find(|u| u.language == "zig")
+            .expect("a `.zig` file must be reported as not analyzed");
+        assert_eq!(zig.files, 1);
         assert_eq!(
             report.unsupported_summary().as_deref(),
-            Some("1 files not analyzed (go)"),
+            Some("1 files not analyzed (zig)"),
             "caller must be able to say N files not analyzed (language)"
         );
         // The supported language is still fully extracted.

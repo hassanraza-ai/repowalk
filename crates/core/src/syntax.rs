@@ -27,6 +27,7 @@ thread_local! {
         RefCell::new(parser_for(tree_sitter_typescript::LANGUAGE_TSX.into()));
     static JAVASCRIPT: RefCell<Parser> =
         RefCell::new(parser_for(tree_sitter_javascript::LANGUAGE.into()));
+    static GO: RefCell<Parser> = RefCell::new(parser_for(tree_sitter_go::LANGUAGE.into()));
 }
 
 /// Which script grammar a path needs. TSX is not a superset the plain
@@ -59,6 +60,10 @@ pub fn parse_rust(source: &str) -> Option<Tree> {
 
 pub fn parse_python(source: &str) -> Option<Tree> {
     PYTHON.with(|parser| parser.borrow_mut().parse(source, None))
+}
+
+pub fn parse_go(source: &str) -> Option<Tree> {
+    GO.with(|parser| parser.borrow_mut().parse(source, None))
 }
 
 pub fn parse_script(kind: ScriptKind, source: &str) -> Option<Tree> {

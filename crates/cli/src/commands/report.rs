@@ -362,11 +362,11 @@ mod tests {
 
     #[test]
     fn unsupported_languages_groups_sorted_and_ignores_supported() {
-        let a = art_with_langs(&["rust", "rb", "go", "rb", "typescript", "python"]);
+        let a = art_with_langs(&["rust", "rb", "zig", "rb", "typescript", "python"]);
         let list = unsupported_languages(&a.index);
         assert_eq!(
             list,
-            vec![("go".to_string(), 1), ("rb".to_string(), 2)],
+            vec![("rb".to_string(), 2), ("zig".to_string(), 1)],
             "{list:?}"
         );
         assert!(unsupported_languages(&art_with_langs(&["rust", "typescript"]).index).is_empty());
