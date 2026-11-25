@@ -18,6 +18,7 @@ pub enum GraphFormat {
     Mermaid,
     Dot,
     Svg,
+    Png,
 }
 
 /// Which diagram to draw. `--scope` (default `call`).
@@ -43,6 +44,11 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let art = artifacts::load(path)?;
     let diagram = diagram_for_scope(scope, symbol, &art.index)?;
+    if format == GraphFormat::Png {
+        let bytes = export::png(&art.index, &art.analysis, &diagram);
+        std::io::Write::write_all(&mut std::io::stdout(), &bytes)?;
+        return Ok(());
+    }
     print!("{}", render(format, &art, &diagram));
     Ok(())
 }
@@ -99,6 +105,7 @@ pub fn render(format: GraphFormat, art: &Artifacts, diagram: &Diagram) -> String
         GraphFormat::Mermaid => export::mermaid(&art.index, &art.analysis, diagram),
         GraphFormat::Dot => export::dot(&art.index, &art.analysis, diagram),
         GraphFormat::Svg => export::svg(&art.index, &art.analysis, diagram),
+        GraphFormat::Png => String::new(),
     };
     if !out.ends_with('\n') {
         out.push('\n');

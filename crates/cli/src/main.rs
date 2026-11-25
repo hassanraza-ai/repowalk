@@ -51,7 +51,7 @@ pub enum Cmd {
         /// Repository path to index
         path: PathBuf,
     },
-    /// Render one diagram to stdout (Mermaid/DOT/SVG)
+    /// Render one diagram to stdout (Mermaid/DOT/SVG/PNG)
     Graph {
         /// Diagram backend
         #[arg(long, value_enum, default_value = "mermaid")]
