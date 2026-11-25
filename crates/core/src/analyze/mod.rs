@@ -16,6 +16,7 @@
 use crate::analysis::Analysis;
 use crate::model::Symbol;
 
+pub mod go;
 pub mod python;
 pub mod rust;
 pub mod ts;
@@ -27,6 +28,7 @@ pub enum Lang {
     Python,
     TypeScript,
     JavaScript,
+    Go,
 }
 
 impl Lang {
@@ -37,6 +39,7 @@ impl Lang {
             "python" => Some(Lang::Python),
             "typescript" => Some(Lang::TypeScript),
             "javascript" => Some(Lang::JavaScript),
+            "go" => Some(Lang::Go),
             _ => None,
         }
     }
@@ -48,6 +51,7 @@ pub fn analyze(file: &str, lang: Lang, source: &str, symbols: &[Symbol], out: &m
         Lang::Rust => rust::analyze(file, source, symbols, out),
         Lang::Python => python::analyze(file, source, symbols, out),
         Lang::TypeScript | Lang::JavaScript => ts::analyze(file, source, symbols, out),
+        Lang::Go => go::analyze(file, source, symbols, out),
     }
 }
 
@@ -105,6 +109,7 @@ mod tests {
         assert_eq!(Lang::from_walk("python"), Some(Lang::Python));
         assert_eq!(Lang::from_walk("typescript"), Some(Lang::TypeScript));
         assert_eq!(Lang::from_walk("javascript"), Some(Lang::JavaScript));
+        assert_eq!(Lang::from_walk("go"), Some(Lang::Go));
         assert_eq!(Lang::from_walk("markdown"), None);
     }
 

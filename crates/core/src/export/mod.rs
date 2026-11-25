@@ -7,6 +7,7 @@
 pub mod directory;
 pub mod dot;
 pub mod mermaid;
+pub mod raster;
 pub mod report;
 pub mod svg;
 
@@ -48,6 +49,11 @@ pub fn dot(index: &Index, analysis: &Analysis, diagram: &Diagram) -> String {
 /// Standalone SVG (hand-rolled; no SVG crate).
 pub fn svg(index: &Index, analysis: &Analysis, diagram: &Diagram) -> String {
     svg::render(index, analysis, diagram)
+}
+
+/// PNG of the same diagram (hand-rolled; no image crate).
+pub fn png(index: &Index, analysis: &Analysis, diagram: &Diagram) -> Vec<u8> {
+    raster::png(index, analysis, diagram)
 }
 
 /// Self-contained Markdown architecture report (overview, module map, hotspots,

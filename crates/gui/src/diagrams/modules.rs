@@ -23,6 +23,15 @@ use crate::theme;
 /// switches within one session; the layout id is global — one module graph).
 const STATE_ID: &str = "diagrams-modules-interact";
 
+/// Path and kind hide nodes. The query only highlights, so typing does not
+/// rebuild the layout.
+#[derive(Clone, Debug, Default)]
+struct DepFilter {
+    query: String,
+    path: String,
+    kind: Option<ModuleKind>,
+}
+
 // ── Geometry: fixed node size, layered grid → deterministic layout ──────────
 const NODE_W: f32 = 184.0;
 const NODE_H: f32 = 48.0;
@@ -134,6 +143,38 @@ fn depths(nodes: &[ModuleNode], children: &BTreeMap<&str, Vec<&str>>) -> BTreeMa
         }
     }
     depth
+}
+
+/// Drop modules outside `path` or of a different `kind`. An empty path and
+/// `kind == None` keep the whole graph. Search is not applied here: it
+/// highlights matches instead of removing them.
+pub fn apply_module_filter(
+    nodes: &[ModuleNode],
+    edges: &[ModuleEdge],
+    path: &str,
+    kind: Option<ModuleKind>,
+) -> (Vec<ModuleNode>, Vec<ModuleEdge>) {
+    let kept: Vec<ModuleNode> = nodes
+        .iter()
+        .filter(|n| {
+            (kind.is_none_or(|k| n.kind == k)) && crate::graph::filter::path_kept(&n.id, path)
+        })
+        .cloned()
+        .collect();
+    let ids: BTreeSet<&str> = kept.iter().map(|n| n.id.as_str()).collect();
+    let edges = edges
+        .iter()
+        .filter(|e| ids.contains(e.from.as_str()) && ids.contains(e.to.as_str()))
+        .cloned()
+        .collect();
+    (kept, edges)
+}
+
+/// Case-insensitive substring over the module id. Empty query matches all,
+/// which is how the canvas knows nothing should be dimmed.
+pub fn module_search_hit(id: &str, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    q.is_empty() || id.to_lowercase().contains(&q)
 }
 
 /// Place `nodes` in depth columns, sorted by id. Only the first [`NODE_CAP`]
@@ -361,10 +402,68 @@ pub fn ui(ui: &mut egui::Ui, app: &mut App) {
         return;
     }
 
-    let cycles = repowalk_core::modules::cycles(&analysis.modules, &analysis.module_edges);
+    let filter_id = egui::Id::new("diagrams-modules-filter");
+    let mut dep = ui
+        .ctx()
+        .data(|d| d.get_temp::<DepFilter>(filter_id))
+        .unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("path")
+                .size(theme::FONT_SMALL)
+                .color(theme::TEXT_MUTED),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut dep.path)
+                .hint_text("src")
+                .desired_width(120.0)
+                .font(egui::TextStyle::Small),
+        );
+        ui.label(
+            egui::RichText::new("kind")
+                .size(theme::FONT_SMALL)
+                .color(theme::TEXT_MUTED),
+        );
+        egui::ComboBox::from_id_salt("dep-kind")
+            .selected_text(match dep.kind {
+                None => "all".to_string(),
+                Some(k) => kind_label(k).to_string(),
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut dep.kind, None, "all");
+                for kind in [
+                    ModuleKind::Crate,
+                    ModuleKind::Dir,
+                    ModuleKind::Module,
+                    ModuleKind::File,
+                ] {
+                    ui.selectable_value(&mut dep.kind, Some(kind), kind_label(kind));
+                }
+            });
+        ui.label(
+            egui::RichText::new("find")
+                .size(theme::FONT_SMALL)
+                .color(theme::TEXT_MUTED),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut dep.query)
+                .hint_text("highlight a module…")
+                .desired_width(160.0)
+                .font(egui::TextStyle::Small),
+        );
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(filter_id, dep.clone()));
+
+    let (nodes, edges) = apply_module_filter(
+        &analysis.modules,
+        &analysis.module_edges,
+        &dep.path,
+        dep.kind,
+    );
+    let cycles = repowalk_core::modules::cycles(&nodes, &edges);
     let cycle_ids = cycle_ids(&cycles);
-    let lay = layout(&analysis.modules, &analysis.module_edges);
-    let parent = parent_map(&analysis.module_edges);
+    let lay = layout(&nodes, &edges);
+    let parent = parent_map(&edges);
     let selected_file = match &app.selection {
         Some(Selection::File(path)) => Some(path.clone()),
         _ => None,
@@ -377,8 +476,7 @@ pub fn ui(ui: &mut egui::Ui, app: &mut App) {
         // Cap banner compares against IMPORT edges only — the canvas draws
         // `.filter(Import).take(EDGE_CAP)`, so counting tree edges too used
         // to announce a false "capped at N imports".
-        analysis
-            .module_edges
+        edges
             .iter()
             .filter(|e| e.kind == ModuleEdgeKind::Import)
             .count(),
@@ -494,10 +592,18 @@ pub fn ui(ui: &mut egui::Ui, app: &mut App) {
                 let hov = hovered.as_deref() == Some(b.id.as_str());
                 let in_cycle = cycle_ids.contains(&b.id);
 
-                let fill = if sel {
+                let hit = module_search_hit(&b.id, &dep.query);
+                let fill = if !hit {
+                    theme::SURFACE_E0
+                } else if sel {
                     theme::SURFACE_SELECTED
                 } else {
                     theme::SURFACE_E2
+                };
+                let title_color = if hit {
+                    theme::TEXT_PRIMARY
+                } else {
+                    theme::TEXT_DISABLED
                 };
                 painter.rect_filled(brect, corner, fill);
                 let (border, bw) = if in_cycle {
@@ -520,7 +626,7 @@ pub fn ui(ui: &mut egui::Ui, app: &mut App) {
                     Align2::LEFT_TOP,
                     elide(&b.id, TEXT_CHARS),
                     font(theme::FONT_SMALL * s, true),
-                    theme::TEXT_PRIMARY,
+                    title_color,
                 );
                 painter.text(
                     brect.right_top() + Vec2::new(-theme::SPACE_2 * s, (theme::SPACE_1 + 1.0) * s),
@@ -671,5 +777,33 @@ mod tests {
         let mut filled = Analysis::new();
         filled.modules.push(node("repo", ModuleKind::Crate, 0, 0));
         assert!(empty_notice(&filled).is_none());
+    }
+
+    #[test]
+    fn path_and_kind_filters_keep_matching_modules_and_their_edges() {
+        let nodes = vec![
+            node("src", ModuleKind::Dir, 10, 1),
+            node("src/core", ModuleKind::Module, 20, 2),
+            node("src/cli", ModuleKind::Module, 8, 1),
+            node("src/core/lib.rs", ModuleKind::File, 12, 3),
+        ];
+        let edges = vec![ModuleEdge {
+            from: "src/cli".into(),
+            to: "src/core".into(),
+            kind: ModuleEdgeKind::Import,
+            count: 2,
+        }];
+        let (kept, kept_edges) = apply_module_filter(&nodes, &edges, "src/core", None);
+        let ids: Vec<_> = kept.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["src/core", "src/core/lib.rs"]);
+        assert!(kept_edges.is_empty(), "the import leaves src/core");
+
+        let (files, _) = apply_module_filter(&nodes, &edges, "", Some(ModuleKind::File));
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].id, "src/core/lib.rs");
+
+        assert!(module_search_hit("src/Core", "core"));
+        assert!(!module_search_hit("src/cli", "core"));
+        assert!(module_search_hit("src/cli", "  "));
     }
 }

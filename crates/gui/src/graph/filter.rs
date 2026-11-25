@@ -4,7 +4,7 @@
 //! tests share, plus the remembered filter/cluster state. That state lives in
 //! egui temp memory (see [`crate::graph::render`]) so the view can keep its
 //! filters across frames without widening `App`, which this task does not own.
-use repowalk_core::model::{Confidence, EdgeKind};
+use repowalk_core::model::{Confidence, EdgeKind, SymbolKind};
 use std::collections::BTreeSet;
 
 /// Hard cap for legibility. Above this the graph is truncated (top fan-in kept)
@@ -53,6 +53,28 @@ pub fn cluster_key(module: &str, collapsed: &BTreeSet<String>) -> Option<String>
     collapsed
         .contains(module)
         .then(|| format!("cluster:{module}"))
+}
+
+/// A path filter keeps `path` when `prefix` is empty, or when `path` is that
+/// prefix or a file inside it. `src/core` keeps `src/core` and `src/core/lib.rs`
+/// and drops `src/cli`.
+pub fn path_kept(path: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim().trim_matches('/');
+    if prefix.is_empty() {
+        return true;
+    }
+    let path = path.trim_matches('/');
+    path == prefix || path.starts_with(&format!("{prefix}/"))
+}
+
+/// `None` keeps every symbol. A set kind keeps only symbols of that kind;
+/// endpoints that are not symbols (bare files) drop out, because they have
+/// no kind to match.
+pub fn symbol_kind_kept(actual: Option<SymbolKind>, want: Option<SymbolKind>) -> bool {
+    match want {
+        None => true,
+        Some(kind) => actual == Some(kind),
+    }
 }
 
 /// Case-insensitive "does any field contain the query" for search-to-highlight.
@@ -105,6 +127,10 @@ pub struct GraphUiState {
     /// `Some(module)` restricts the graph to one module.
     pub module: Option<String>,
     pub search: String,
+    /// Repo-relative path prefix. Empty means every path.
+    pub path: String,
+    /// When set, only symbols of this kind stay in the graph.
+    pub symbol_kind: Option<SymbolKind>,
     /// Which layout algorithm positions the nodes.
     pub layout: GraphLayout,
     /// Modules currently collapsed into a single super-node.
@@ -132,6 +158,8 @@ pub struct BuildSig {
     pub imports: bool,
     pub confidence: ConfidenceFilter,
     pub module: Option<String>,
+    pub path: String,
+    pub symbol_kind: Option<SymbolKind>,
     pub collapsed: BTreeSet<String>,
 }
 
@@ -154,6 +182,30 @@ mod tests {
         assert!(ConfidenceFilter::ExactOnly.keeps(Confidence::Exact));
         assert!(!ConfidenceFilter::ExactOnly.keeps(Confidence::NameOnly));
         assert!(!ConfidenceFilter::ExactOnly.keeps(Confidence::Ambiguous));
+    }
+
+    #[test]
+    fn path_filter_is_a_directory_prefix() {
+        assert!(path_kept("src/core/lib.rs", ""));
+        assert!(path_kept("src/core/lib.rs", "  "));
+        assert!(path_kept("src/core/lib.rs", "src/core"));
+        assert!(path_kept("src/core", "src/core"));
+        assert!(!path_kept("src/cli/main.rs", "src/core"));
+        assert!(!path_kept("src/core_extra/a.rs", "src/core"));
+    }
+
+    #[test]
+    fn symbol_kind_filter_drops_other_kinds_and_bare_files() {
+        assert!(symbol_kind_kept(Some(SymbolKind::Function), None));
+        assert!(symbol_kind_kept(
+            Some(SymbolKind::Function),
+            Some(SymbolKind::Function)
+        ));
+        assert!(!symbol_kind_kept(
+            Some(SymbolKind::Struct),
+            Some(SymbolKind::Function)
+        ));
+        assert!(!symbol_kind_kept(None, Some(SymbolKind::Function)));
     }
 
     #[test]

@@ -698,6 +698,8 @@ pub struct BuildParams<'a> {
     pub imports: bool,
     pub confidence: ConfidenceFilter,
     pub module: Option<&'a str>,
+    pub path: &'a str,
+    pub symbol_kind: Option<repowalk_core::model::SymbolKind>,
     pub collapsed: &'a BTreeSet<String>,
     pub god_files: &'a BTreeSet<String>,
     pub cap: usize,
@@ -748,6 +750,20 @@ fn canonical_caller(sym_of: &BTreeMap<&str, &Symbol>, raw: &str, line: usize) ->
         (Some(hit), None) => hit.id.clone(),
         _ => raw.to_owned(),
     }
+}
+
+fn endpoint_kept(
+    id: &str,
+    sym_of: &BTreeMap<&str, &Symbol>,
+    path_prefix: &str,
+    kind: Option<repowalk_core::model::SymbolKind>,
+) -> bool {
+    let sym = sym_of.get(id).copied();
+    let path = sym
+        .map(|s| s.file.as_str())
+        .or_else(|| id.strip_prefix("file:"))
+        .unwrap_or(id);
+    filter::path_kept(path, path_prefix) && filter::symbol_kind_kept(sym.map(|s| s.kind), kind)
 }
 
 fn raw_info(
@@ -862,6 +878,11 @@ pub fn build_graph(idx: &Index, p: &BuildParams) -> BuiltGraph {
             if a_info.module != m || b_info.module != m {
                 continue;
             }
+        }
+        if !endpoint_kept(&caller, &sym_of, p.path, p.symbol_kind)
+            || !endpoint_kept(&e.callee, &sym_of, p.path, p.symbol_kind)
+        {
+            continue;
         }
         let a = ensure_node(&caller, &a_info, p.collapsed, &mut meta, &mut members);
         let b = ensure_node(&e.callee, &b_info, p.collapsed, &mut meta, &mut members);
@@ -979,6 +1000,8 @@ pub fn ui(ui: &mut egui::Ui, app: &mut App) {
         imports: app.edge_imports,
         confidence: state.confidence,
         module: state.module.clone(),
+        path: state.path.clone(),
+        symbol_kind: state.symbol_kind,
         collapsed: state.collapsed.clone(),
     };
     if app.graph_state.is_none() || state.last_sig.as_ref() != Some(&sig) {
@@ -999,6 +1022,8 @@ pub fn ui(ui: &mut egui::Ui, app: &mut App) {
                 imports: app.edge_imports,
                 confidence: state.confidence,
                 module: state.module.as_deref(),
+                path: &state.path,
+                symbol_kind: state.symbol_kind,
                 collapsed: &state.collapsed,
                 god_files: &god,
                 cap: NODE_CAP,
@@ -1404,6 +1429,37 @@ pub fn legend(ui: &mut egui::Ui, app: &mut App) {
                     });
 
                 ui.add_space(theme::SPACE_1);
+                ui.label(hint("path"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.path)
+                        .hint_text("src/core")
+                        .desired_width(110.0)
+                        .font(egui::TextStyle::Small),
+                );
+                ui.label(hint("kind"));
+                egui::ComboBox::from_id_salt("graph-kind-filter")
+                    .selected_text(match state.symbol_kind {
+                        None => "all".to_string(),
+                        Some(k) => format!("{k:?}"),
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut state.symbol_kind, None, "all kinds");
+                        for kind in [
+                            repowalk_core::model::SymbolKind::Function,
+                            repowalk_core::model::SymbolKind::Method,
+                            repowalk_core::model::SymbolKind::Struct,
+                            repowalk_core::model::SymbolKind::Enum,
+                            repowalk_core::model::SymbolKind::Trait,
+                            repowalk_core::model::SymbolKind::Class,
+                            repowalk_core::model::SymbolKind::Mod,
+                        ] {
+                            ui.selectable_value(
+                                &mut state.symbol_kind,
+                                Some(kind),
+                                format!("{kind:?}"),
+                            );
+                        }
+                    });
                 ui.label(hint("find"));
                 ui.add(
                     egui::TextEdit::singleline(&mut state.search)
@@ -1557,6 +1613,8 @@ mod tests {
             imports: true,
             confidence: ConfidenceFilter::All,
             module: None,
+            path: "",
+            symbol_kind: None,
             collapsed,
             god_files: &EMPTY_GOD,
             cap: NODE_CAP,
@@ -1565,6 +1623,88 @@ mod tests {
 
     // A function-local `&'static` empty set keeps `params` borrow-clean.
     static EMPTY_GOD: BTreeSet<String> = BTreeSet::new();
+
+    #[test]
+    fn path_and_kind_filters_drop_edges_outside_the_selection() {
+        let mut idx = Index::new("/repo");
+        idx.symbols.push(sym_kind(
+            "src/core/a.rs:1",
+            "parse",
+            repowalk_core::model::SymbolKind::Function,
+        ));
+        idx.symbols.push(sym_kind(
+            "src/core/a.rs:12",
+            "emit",
+            repowalk_core::model::SymbolKind::Function,
+        ));
+        idx.symbols.push(sym_kind(
+            "src/core/a.rs:20",
+            "Node",
+            repowalk_core::model::SymbolKind::Struct,
+        ));
+        idx.symbols.push(sym_kind(
+            "src/cli/main.rs:1",
+            "main",
+            repowalk_core::model::SymbolKind::Function,
+        ));
+        for s in &mut idx.symbols {
+            s.end_line = s.start_line + 6;
+        }
+        let mut inside = ed(
+            "parse",
+            "src/core/a.rs:12",
+            EdgeKind::Call,
+            Confidence::Exact,
+        );
+        inside.line = 2;
+        let mut to_struct = ed(
+            "parse",
+            "src/core/a.rs:20",
+            EdgeKind::Call,
+            Confidence::Exact,
+        );
+        to_struct.line = 3;
+        let mut from_cli = ed("main", "src/core/a.rs:1", EdgeKind::Call, Confidence::Exact);
+        from_cli.line = 2;
+        idx.edges.extend([inside, to_struct, from_cli]);
+
+        let collapsed = BTreeSet::new();
+        let mut p = params(&collapsed);
+        p.path = "src/core";
+        let labels = labels_of(&build_graph(&idx, &p));
+        assert!(labels.iter().any(|l| l == "parse"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "emit"), "{labels:?}");
+        assert!(
+            labels.iter().all(|l| l != "main"),
+            "cli/main is outside src/core: {labels:?}"
+        );
+
+        p.symbol_kind = Some(repowalk_core::model::SymbolKind::Function);
+        let labels = labels_of(&build_graph(&idx, &p));
+        assert!(labels.iter().any(|l| l == "parse"), "{labels:?}");
+        assert!(
+            labels.iter().all(|l| l != "Node"),
+            "struct Node is not a function: {labels:?}"
+        );
+    }
+
+    fn labels_of(built: &BuiltGraph) -> Vec<String> {
+        built
+            .graph
+            .g()
+            .node_weights()
+            .map(|n| n.payload().label.clone())
+            .collect()
+    }
+
+    fn sym_kind(id: &str, name: &str, kind: repowalk_core::model::SymbolKind) -> Symbol {
+        let mut s = sym(id, name);
+        s.kind = kind;
+        s.file = id.rsplit_once(':').unwrap().0.to_string();
+        s.start_line = id.rsplit_once(':').unwrap().1.parse().unwrap();
+        s.end_line = s.start_line;
+        s
+    }
 
     #[test]
     fn labels_are_real_names_and_non_exact_edges_are_dashed() {

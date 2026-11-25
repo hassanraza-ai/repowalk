@@ -701,16 +701,40 @@ impl App {
             // `REPOWALK_AUTOSHOT_LAYOUT=force|layered` picks the graph layout
             // (it lives in egui temp memory, not `App`, so it is set through
             // the graph module's own state store).
-            if let Ok(layout) = std::env::var("REPOWALK_AUTOSHOT_LAYOUT") {
-                let picked = match layout.as_str() {
-                    "layered" => Some(crate::graph::filter::GraphLayout::Layered),
-                    "force" => Some(crate::graph::filter::GraphLayout::Force),
-                    _ => None,
-                };
-                if let Some(picked) = picked {
-                    let mut state = crate::graph::render::load_state(ctx);
-                    state.layout = picked;
-                    crate::graph::render::save_state(ctx, state);
+            {
+                let mut state = crate::graph::render::load_state(ctx);
+                if let Ok(layout) = std::env::var("REPOWALK_AUTOSHOT_LAYOUT") {
+                    if let Some(picked) = match layout.as_str() {
+                        "layered" => Some(crate::graph::filter::GraphLayout::Layered),
+                        "force" => Some(crate::graph::filter::GraphLayout::Force),
+                        _ => None,
+                    } {
+                        state.layout = picked;
+                    }
+                }
+                if let Ok(query) = std::env::var("REPOWALK_AUTOSHOT_SEARCH") {
+                    state.search = query;
+                }
+                if let Ok(path) = std::env::var("REPOWALK_AUTOSHOT_PATH") {
+                    state.path = path;
+                }
+                if let Ok(kind) = std::env::var("REPOWALK_AUTOSHOT_KIND") {
+                    state.symbol_kind = match kind.as_str() {
+                        "function" => Some(repowalk_core::model::SymbolKind::Function),
+                        "method" => Some(repowalk_core::model::SymbolKind::Method),
+                        "struct" => Some(repowalk_core::model::SymbolKind::Struct),
+                        "class" => Some(repowalk_core::model::SymbolKind::Class),
+                        _ => None,
+                    };
+                }
+                crate::graph::render::save_state(ctx, state);
+            }
+            if let Ok(which) = std::env::var("REPOWALK_AUTOSHOT_EXPORT") {
+                match which.as_str() {
+                    "png" => self.export_diagram(Diagram::CallGraph, "png", "png"),
+                    "svg" => self.export_diagram(Diagram::CallGraph, "svg", "svg"),
+                    "modules-png" => self.export_diagram(Diagram::Modules, "png", "png"),
+                    _ => {}
                 }
             }
         }
@@ -823,24 +847,38 @@ impl App {
         }
     }
 
-    /// One v2 diagram (F8) as Mermaid / DOT / SVG — the same pure emitters the
-    /// CLI `graph` uses. `ext` is the file extension, `format` the emitter key.
-    pub fn export_diagram(&mut self, diagram: Diagram, format: &str, ext: &str) {
-        let Some((idx, analysis, repo)) = self.export_inputs() else {
-            return;
-        };
-        let text = match format {
-            "mermaid" => repowalk_core::export::mermaid(&idx, &analysis, &diagram),
-            "dot" => repowalk_core::export::dot(&idx, &analysis, &diagram),
-            _ => repowalk_core::export::svg(&idx, &analysis, &diagram),
-        };
-        let name = match &diagram {
+    fn diagram_stem(diagram: &Diagram) -> &'static str {
+        match diagram {
             Diagram::CallGraph => "callgraph",
             Diagram::Types => "types",
             Diagram::Cfg { .. } => "cfg",
             Diagram::Modules => "modules",
             Diagram::Directory { .. } => "directory",
+        }
+    }
+
+    /// One v2 diagram (F8) as Mermaid / DOT / SVG / PNG — the same pure emitters the
+    /// CLI `graph` uses. `ext` is the file extension, `format` the emitter key.
+    pub fn export_diagram(&mut self, diagram: Diagram, format: &str, ext: &str) {
+        let Some((idx, analysis, repo)) = self.export_inputs() else {
+            return;
         };
+        if format == "png" {
+            let bytes = repowalk_core::export::png(&idx, &analysis, &diagram);
+            let name = Self::diagram_stem(&diagram);
+            let path = repo.join(format!("repowalk-{name}.{ext}"));
+            match std::fs::write(&path, bytes) {
+                Ok(()) => self.status = format!("saved {}", path.display()),
+                Err(e) => self.error = Some(format!("diagram export failed: {e}")),
+            }
+            return;
+        }
+        let text = match format {
+            "mermaid" => repowalk_core::export::mermaid(&idx, &analysis, &diagram),
+            "dot" => repowalk_core::export::dot(&idx, &analysis, &diagram),
+            _ => repowalk_core::export::svg(&idx, &analysis, &diagram),
+        };
+        let name = Self::diagram_stem(&diagram);
         let path = repo.join(format!("repowalk-{name}.{ext}"));
         match std::fs::write(&path, text) {
             Ok(()) => self.status = format!("saved {}", path.display()),
@@ -975,6 +1013,16 @@ impl App {
                                 "dot",
                                 "dot",
                             );
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button("Diagrams to PNG (.png)", |ui| {
+                        if ui.button("Call graph").clicked() {
+                            self.export_diagram(Diagram::CallGraph, "png", "png");
+                            ui.close();
+                        }
+                        if ui.button("Modules").clicked() {
+                            self.export_diagram(Diagram::Modules, "png", "png");
                             ui.close();
                         }
                     });
